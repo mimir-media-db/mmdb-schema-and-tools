@@ -100,60 +100,83 @@ MMDB development is organized into three main phases, each building on the previ
 **Goal**: Automate data import from Wikidata using local scripts.
 
 ### Stage 2.1: Wikidata Integration
-- [ ] SPARQL query builder
+- [x] SPARQL query builder
   - Backlog query (historical data)
   - Recent query (updates)
   - Rate limiting and throttling
-- [ ] Wikidata entity parser
+- [x] Wikidata entity parser
   - Extract movie data
-  - Extract series/season/episode data
-  - Extract person data
-- [ ] External ID mapping (Wikidata, IMDb, TMDB)
+  - [ ] Extract series/season/episode data
+  - [ ] Extract person data
+- [x] External ID mapping (Wikidata, IMDb, TMDB)
 
 ### Stage 2.2: Data Normalization
-- [ ] MMDB ID generator
+- [x] MMDB ID generator
   - Slug generation
   - ID uniqueness validation
-- [ ] Entity normalizer
+- [x] Entity normalizer (movies)
   - Map Wikidata to MMDB schema
   - Handle missing fields
   - Validate output
-- [ ] Duplicate detection
+- [x] Duplicate detection (GitHub-based)
+  - Check master branch for existing entities
+  - Check pending PRs for in-flight entities
+  - Collect exactly N unique entities per run
 
 ### Stage 2.3: GitHub Integration
-- [ ] Octokit setup and authentication
-- [ ] Branch creation via API
-- [ ] File creation/update via API
-- [ ] PR creation with labels
-- [ ] Batch operations (multiple files per PR)
+- [x] Octokit setup and authentication
+- [x] Branch creation via API
+- [x] File creation/update via API
+- [x] PR creation with labels
+- [x] Batch operations (multiple files per PR)
+- [x] Scan pending PRs for duplicate prevention
 
-### Stage 2.4: Ingestion Script
-- [ ] State management (local JSON file)
-  - Track backlog offset
-  - Track last recent timestamp
-- [ ] Main ingestion loop
+### Stage 2.4: Ingestion Script (Movies)
+- [x] GitHub-based state management
+  - Derive state from master branch
+  - Scan open PRs for pending entities
+  - No local state files required
+- [x] Main ingestion loop
   - Fetch from Wikidata
   - Normalize entities
   - Validate output
   - Create GitHub PRs
-  - Update state
-- [ ] Error handling and logging
-- [ ] CLI interface with options
+- [x] Error handling and logging
+- [x] CLI interface with options
 
 ### Stage 2.5: Testing & Refinement
-- [ ] Test with 100 titles
-- [ ] Verify PR quality
-- [ ] Tune rate limits
-- [ ] Handle edge cases
-- [ ] Documentation updates
+- [x] Unit tests (27 tests, all passing)
+  - ID generator tests (10)
+  - Normalizer tests (3)
+  - Wikidata client tests (4)
+  - Duplicate prevention tests (10)
+- [x] Documentation updates
+  - Ingestion guide
+  - Testing guide
+
+### Stage 2.6: Extend to Other Entity Types
+- [ ] People ingestion
+  - [ ] SPARQL query for people
+  - [ ] Person normalizer
+  - [ ] Duplicate prevention (same GitHub-based approach)
+  - [ ] Route to mmdb-people repo
+  - [ ] Unit tests
+- [ ] Series ingestion
+  - [ ] SPARQL query for series
+  - [ ] Series/season/episode normalizers
+  - [ ] Duplicate prevention (same GitHub-based approach)
+  - [ ] Route to year repos
+  - [ ] Unit tests
 
 **Phase 2 Success Criteria**:
-- ✅ Ingestion script runs successfully
+- ✅ Ingestion script runs successfully (movies)
 - ✅ Can import 100 titles/day
 - ✅ PRs are well-formed and valid
-- ✅ State persists between runs
+- ✅ State derived from GitHub (no local files)
+- ✅ Duplicate prevention working (master + pending PRs)
 - ✅ Error handling is robust
 - ✅ Documentation for running locally
+- [ ] People and series ingestion implemented
 
 ---
 
@@ -194,6 +217,30 @@ MMDB development is organized into three main phases, each building on the previ
 - ✅ Cost stays within free tier
 - ✅ Monitoring and alerts configured
 - ✅ Documentation for deployment
+
+---
+
+## Key Design Decisions
+
+### GitHub-Based State Management (Phase 2)
+
+**Problem**: How to prevent duplicate PRs when running ingestion multiple times?
+
+**Solution**: Derive state from GitHub instead of local files.
+
+**Implementation**:
+1. **Check master branch**: Read `data/movies/index.json` for existing entities
+2. **Scan open PRs**: Fetch all open PRs and extract entity IDs from files
+3. **Skip duplicates**: Don't create PRs for entities already in master or pending PRs
+4. **Collect exactly N**: Fetch 3x limit from Wikidata, filter duplicates, collect exactly N unique entities
+
+**Benefits**:
+- ✅ No local state files to maintain
+- ✅ Works from any machine
+- ✅ Automatically syncs when PRs are merged
+- ✅ No manual cleanup needed
+
+**Replication**: This approach must be replicated for people and series ingestion (Stage 2.6).
 
 ---
 
