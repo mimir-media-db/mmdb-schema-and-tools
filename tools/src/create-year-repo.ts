@@ -38,15 +38,54 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: repo
+      
+      - uses: actions/checkout@v4
+        with:
+          repository: mimir-media-db/mmdb-schema-and-tools
+          path: tools
+      
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      
+      - name: Build tools
+        run: |
+          cd tools
+          npm install
+          npm run build
+      
       - name: Install dependencies
-        run: npm install
+        run: |
+          cd repo
+          npm install
+      
       - name: Validate
-        run: npm run validate
+        run: |
+          cd repo
+          ../tools/dist/validate-repo.js
+      
       - name: Build indexes
-        run: npm run build-indexes
+        run: |
+          cd repo
+          ../tools/dist/build-indexes.js
+      
+      - name: Check for index changes
+        id: check_changes
+        run: |
+          cd repo
+          git diff --exit-code data/*/index.json || echo "changed=true" >> $GITHUB_OUTPUT
+      
+      - name: Commit index updates
+        if: steps.check_changes.outputs.changed == 'true' && github.event_name == 'push'
+        run: |
+          cd repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/*/index.json
+          git commit -m "Update indexes [skip ci]"
+          git push
 `;
 
 function main() {
