@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "id": "p_christopher_nolan",
+  "name": "Christopher Nolan",
+  "birth_year": 1970,
+  "external_ids": {
+    "wikidata": "Q25191",
+    "imdb": "nm0634240"
+  },
+  "last_updated": "2026-01-19"
+}

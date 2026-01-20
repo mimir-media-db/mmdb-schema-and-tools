@@ -1,0 +1,97 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://mmdb.org/schema/series-v1.json",
+  "title": "Series",
+  "description": "A TV show, streaming series, or limited series",
+  "type": "object",
+  "required": ["schema_version", "id", "title", "start_year"],
+  "properties": {
+    "schema_version": {
+      "type": "number",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^s_[a-z0-9_]+$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "original_title": {
+      "type": "string"
+    },
+    "start_year": {
+      "type": "number",
+      "minimum": 1800,
+      "maximum": 2100
+    },
+    "end_year": {
+      "type": ["number", "null"],
+      "minimum": 1800,
+      "maximum": 2100
+    },
+    "summary": {
+      "type": "string"
+    },
+    "original_language": {
+      "type": "string",
+      "pattern": "^[a-z]{2}$"
+    },
+    "countries": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z]{2}$"
+      }
+    },
+    "genres": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "creators": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^p_[a-z0-9_]+$"
+      }
+    },
+    "main_cast": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^p_[a-z0-9_]+$"
+      }
+    },
+    "total_seasons": {
+      "type": "number",
+      "minimum": 1
+    },
+    "total_episodes": {
+      "type": "number",
+      "minimum": 1
+    },
+    "external_ids": {
+      "type": "object",
+      "properties": {
+        "wikidata": {
+          "type": "string",
+          "pattern": "^Q[0-9]+$"
+        },
+        "imdb": {
+          "type": "string",
+          "pattern": "^tt[0-9]+$"
+        },
+        "tmdb": {
+          "type": "number"
+        }
+      }
+    },
+    "last_updated": {
+      "type": "string",
+      "format": "date"
+    }
+  }
+}

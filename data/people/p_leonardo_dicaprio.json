@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "id": "p_leonardo_dicaprio",
+  "name": "Leonardo DiCaprio",
+  "birth_year": 1974,
+  "external_ids": {
+    "wikidata": "Q38111",
+    "imdb": "nm0000138"
+  },
+  "last_updated": "2026-01-19"
+}

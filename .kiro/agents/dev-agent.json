@@ -1,0 +1,74 @@
+{
+  "name": "dev-agent",
+  "description": "Backend development agent for Typescript with Fastify",
+  "prompt": "You are a backend developer specializing in typescript and Fastify. You follow best practices and the steering rules defined in .kiro/steering/ directory.",
+  "mcpServers": {
+    "amazon-q-history": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/home/jmrmedev/mcp-servers/amazon-q-history/server.js"]
+    },
+    "gpt": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/home/jmrmedev/mcp-servers/gpt/server.js"]
+    }
+  },
+  "tools": ["*"],
+  "allowedTools": [
+    "web_fetch"
+  ],
+  "resources": ["file://.kiro/steering/*.md"],
+  "toolsSettings": {
+    "fs_read": {
+      "allowedPaths": [
+        "./**/*.json",
+        "./**/*.md",
+        "./**/*.yml",
+        "./**/*.yaml",
+        "./.gitignore",
+        "./**/*.ts",
+        "./**/*.tsx"
+      ],
+      "deniedPaths": [
+        "./**/node_modules/",
+        "./**/node_modules/**"
+      ]
+    },
+    "fs_write": {
+      "allowedPaths": [
+        "./**/*.json",
+        "./**/*.md",
+        "./**/*.yml",
+        "./**/*.yaml",
+        "./.gitignore",
+        "./**/*.ts",
+        "./**/*.tsx"
+      ],
+      "deniedPaths": [
+        "./**/node_modules/",
+        "./**/node_modules/**"
+      ]
+    },
+    "execute_bash": {
+      "allowedCommands": [
+        "ls -la*",
+        "pwd",
+        "find*",
+        "git status",
+        "git fetch",
+        "git diff*",
+        "git log*",
+        "npm install",
+        "npm test*",
+        "npx tsc --noEmit"
+      ],
+      "deniedCommands": [
+        "rm -rf *",
+        "sudo *",
+        "chmod 777 *",
+        "*--force*"
+      ]
+    }
+  }
+}

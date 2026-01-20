@@ -1,0 +1,994 @@
+# MMDB – Mimir Media Database  
+## Comprehensive Implementation Blueprint (GitHub-centric)
+
+> **Goal**: Define a practical, scalable, open blueprint for MMDB – a distributed, year-sharded, GitHub-hosted media metadata database (movies, series, documentaries, etc.) that others can reliably build APIs and derivative databases from.
+
+This document assumes:
+
+- The **canonical source of truth** is a GitHub **organization**.
+- Data is stored as **per-title JSON files** with **script-generated index files**.
+- Data is **sharded per release year** into separate repos + shared **people** and **tools/schema** repos.
+- Consumers treat the org as a **data source**, not as a high-QPS API backend.
+
+
+---
+
+## 1. High-Level Design
+
+### 1.1 Core principles
+
+1. **Open & inspectable**  
+   - Plain JSON files in public GitHub repos.
+   - No proprietary formats or opaque blobs.
+
+2. **Modular & sharded**  
+   - One repo per **release year** of titles.
+   - Separate repo for **people** data.
+   - Separate repo for **schema, tools, docs**.
+   - Optional meta repo for cross-year listings.
+
+3. **Stable & versioned**  
+   - Stable internal IDs (never reused).
+   - Schema versioning (`schema_version` per object).
+   - Append-only philosophy: no history rewrites.
+
+4. **GitHub as source, not runtime DB**  
+   - GitHub repos = canonical data distribution.
+   - Derivative projects import into their own DBs or caches for querying.
+
+5. **Automation-first**  
+   - Repos created programmatically.
+   - Indexes & validations done by scripts/CI.
+   - Consistent layout enforced by shared tools.
+
+
+---
+
+## 2. GitHub Organization Structure
+
+### 2.1 Organization
+
+**Org name (examples)**
+
+- `mmdb` (short)
+- `mimir-media-db` (descriptive)
+
+For the blueprint, we'll assume `mmdb` as the org name.
+
+### 2.2 Repositories
+
+1. **Per-year data repos**  
+   - `mmdb-1900`, `mmdb-1901`, …, `mmdb-2025`, etc.  
+   - Each stores all titles whose **primary release year** is that year.
+
+2. **Global people repo**  
+   - `mmdb-people`
+   - All person records (actors, directors, writers, etc.).
+
+3. **Schema & tools repo**  
+   - `mmdb-schema-and-tools`
+   - Contains:
+     - JSON Schemas
+     - Validation scripts
+     - Index builders
+     - ETL examples
+     - Architecture docs
+
+4. **Meta repo (optional but recommended)**  
+   - `mmdb-meta`
+   - Cross-repo metadata:
+     - List of year repos
+     - Versioning info
+     - “Start here” README for consumers.
+
+---
+
+## 3. Repo Layouts
+
+### 3.1 Per-Year Repo Layout (`mmdb-YYYY`)
+
+**Example**: `mmdb-2010`
+
+```text
+mmdb-2010/
+  data/
+    movies/
+      index.json
+      inception-2010.json
+      the-social-network-2010.json
+      ...
+    series/
+      index.json
+      breaking-bad/
+        meta.json
+        seasons/
+          01/
+            meta.json
+            episodes/
+              01.json
+              02.json
+              ...
+          02/
+            meta.json
+            episodes/
+              ...
+    # Optional future types:
+    # shorts/
+    # specials/
+  .github/
+    workflows/
+      validate-and-build.yml
+  README.md
+  LICENSE
+```
+
+Notes:
+
+- All **title JSON files** live under `data/...`.
+- `index.json` is **script-generated**; never hand-edited.
+- For **series**, we group per series → per season → per episode, for clarity.
+
+---
+
+### 3.2 People Repo Layout (`mmdb-people`)
+
+```text
+mmdb-people/
+  data/
+    people/
+      index.json
+      p_christopher_nolan.json
+      p_leonardo_dicaprio.json
+      ...
+  .github/
+    workflows/
+      validate-and-build.yml
+  README.md
+  LICENSE
+```
+
+---
+
+### 3.3 Schema & Tools Repo Layout (`mmdb-schema-and-tools`)
+
+```text
+mmdb-schema-and-tools/
+  schema/
+    movie-v1.json
+    series-v1.json
+    season-v1.json
+    episode-v1.json
+    person-v1.json
+  tools/
+    build-indexes.ts
+    validate-repo.ts
+    etl-to-sqlite.ts
+    create-year-repo.ts
+    shared-config.ts
+  docs/
+    architecture.md
+    schema-evolution.md
+    contribution-guide.md
+    data-sourcing.md
+  README.md
+  LICENSE
+```
+
+Functions:
+
+- **`schema/`**: JSON Schema or spec for each entity type + version.
+- **`tools/`**: Scripts used across all data repos.
+- **`docs/`**: Central technical documentation.
+
+---
+
+### 3.4 Meta Repo Layout (`mmdb-meta`) – Optional
+
+```text
+mmdb-meta/
+  data/
+    repos.json       # machine-readable list of all current mmdb-* repos
+  README.md          # human-facing entrypoint
+  LICENSE
+```
+
+`repos.json` example:
+
+```json
+{
+  "schema_version": 1,
+  "year_repos": [
+    { "name": "mmdb-1950", "year": 1950 },
+    { "name": "mmdb-1951", "year": 1951 },
+    { "name": "mmdb-2010", "year": 2010 }
+  ],
+  "people_repo": "mmdb-people",
+  "schema_repo": "mmdb-schema-and-tools"
+}
+```
+
+
+---
+
+## 4. Data Model (Conceptual)
+
+Entities:
+
+- **Movie** – standalone film or documentary.
+- **Series** – TV / streaming show, limited series, etc.
+- **Season** – subdivision of series.
+- **Episode** – part of a season or standalone for series.
+- **Person** – actors, directors, writers, etc.
+- **Credits** – relationship between titles and people, with roles.
+- **External IDs** – linking MMDB IDs to external ecosystem IDs.
+
+Generic design guidelines:
+
+- Each entity has:
+  - A stable **`id`** (MMDB ID).
+  - A **`schema_version`**.
+  - A **`last_updated`** date.
+- IDs are globally unique per type and never reused.
+
+---
+
+## 5. ID & Naming Conventions
+
+### 5.1 IDs
+
+Use prefixed, sluglike IDs.
+
+- Movie: `m_<slug>_<year>`
+  - e.g. `m_inception_2010`
+- Series: `s_<slug>`
+  - e.g. `s_breaking_bad`
+- Season: `s_breaking_bad_season_01`
+- Episode: `e_breaking_bad_s01e01`
+- Person: `p_<slug>`
+  - `p_christopher_nolan`, `p_leonardo_dicaprio`
+
+Slugs:
+
+- Lowercase
+- ASCII
+- Words separated by `_` or `-`
+- Non-ASCII normalized or transliterated as best effort.
+
+### 5.2 File Names & Paths
+
+Per movie file path:
+
+```text
+data/movies/inception-2010.json
+```
+
+Where file name = `<slug>-<year>.json`.
+
+Per series:
+
+```text
+data/series/breaking-bad/meta.json
+data/series/breaking-bad/seasons/01/meta.json
+data/series/breaking-bad/seasons/01/episodes/01.json
+```
+
+This ensures predictable, URL-friendly paths.
+
+---
+
+## 6. JSON Schemas (Rough)
+
+> Note: These are **blueprint-level** schemas. In the real repo, you'd define them as formal JSON Schema files in `mmdb-schema-and-tools/schema/`.
+
+### 6.1 Movie JSON (per-title file)
+
+**Location (example)**: `mmdb-2010/data/movies/inception-2010.json`
+
+```json
+{
+  "schema_version": 1,
+  "id": "m_inception_2010",
+  "wikidata_id": "Q43320",
+  "imdb_id": "tt1375666",
+  "tmdb_id": 27205,
+
+  "title": "Inception",
+  "original_title": "Inception",
+  "year": 2010,
+  "release_date": "2010-07-16",
+
+  "type": "movie",      // "movie", "documentary", "short", etc.
+  "runtime_minutes": 148,
+  "original_language": "en",
+  "countries": ["US", "GB"],
+
+  "summary": "A thief who steals corporate secrets through dream-sharing technology is given a chance at redemption...",
+
+  "genres": ["science fiction", "action", "thriller"],
+
+  "directors": ["p_christopher_nolan"],
+  "writers": ["p_christopher_nolan"],
+  "cast": [
+    "p_leonardo_dicaprio",
+    "p_joseph_gordon_levitt",
+    "p_ellen_page"
+  ],
+
+  "external_ids": {
+    "wikidata": "Q43320",
+    "imdb": "tt1375666",
+    "tmdb": 27205
+  },
+
+  "last_updated": "2025-01-01"
+}
+```
+
+### 6.2 Series JSON (series `meta.json`)
+
+**Location**: `mmdb-2008/data/series/breaking-bad/meta.json` (for first air year)
+
+```json
+{
+  "schema_version": 1,
+  "id": "s_breaking_bad",
+  "wikidata_id": "Q9130",
+  "imdb_id": "tt0903747",
+  "tmdb_id": 1396,
+
+  "title": "Breaking Bad",
+  "original_title": "Breaking Bad",
+  "start_year": 2008,
+  "end_year": 2013,
+
+  "summary": "A high school chemistry teacher turned methamphetamine producer navigates the criminal underworld...",
+
+  "original_language": "en",
+  "countries": ["US"],
+
+  "genres": ["crime", "drama", "thriller"],
+
+  "creators": ["p_vince_gilligan"],
+  "main_cast": [
+    "p_bryan_cranston",
+    "p_aaron_paul"
+  ],
+
+  "total_seasons": 5,
+  "total_episodes": 62,
+
+  "external_ids": {
+    "wikidata": "Q9130",
+    "imdb": "tt0903747",
+    "tmdb": 1396
+  },
+
+  "last_updated": "2025-01-01"
+}
+```
+
+### 6.3 Season JSON (`season meta.json`)
+
+**Location**: `data/series/breaking-bad/seasons/01/meta.json`
+
+```json
+{
+  "schema_version": 1,
+  "id": "s_breaking_bad_season_01",
+  "series_id": "s_breaking_bad",
+  "season_number": 1,
+
+  "title": "Season 1",
+  "summary": "Season 1 introduces Walter White and Jesse Pinkman as they begin cooking meth...",
+  "year": 2008,
+  "first_air_date": "2008-01-20",
+  "last_air_date": "2008-03-09",
+
+  "episode_count": 7,
+  "last_updated": "2025-01-01"
+}
+```
+
+### 6.4 Episode JSON
+
+**Location**: `data/series/breaking-bad/seasons/01/episodes/01.json`
+
+```json
+{
+  "schema_version": 1,
+  "id": "e_breaking_bad_s01e01",
+  "series_id": "s_breaking_bad",
+  "season_id": "s_breaking_bad_season_01",
+
+  "season_number": 1,
+  "episode_number": 1,
+  "absolute_number": 1,
+
+  "title": "Pilot",
+  "air_date": "2008-01-20",
+  "runtime_minutes": 58,
+
+  "summary": "Diagnosed with cancer, high school chemistry teacher Walter White partners with former student Jesse Pinkman to cook meth.",
+
+  "directors": ["p_vince_gilligan"],
+  "writers": ["p_vince_gilligan"],
+  "cast": [
+    "p_bryan_cranston",
+    "p_aaron_paul",
+    "p_anna_gunn"
+  ],
+
+  "external_ids": {
+    "imdb": "tt0959621",
+    "wikidata": "Q2077370"
+  },
+
+  "last_updated": "2025-01-01"
+}
+```
+
+### 6.5 Person JSON (`mmdb-people`)
+
+**Location**: `mmdb-people/data/people/p_christopher_nolan.json`
+
+```json
+{
+  "schema_version": 1,
+  "id": "p_christopher_nolan",
+  "wikidata_id": "Q25191",
+  "imdb_id": "nm0634240",
+
+  "name": "Christopher Nolan",
+  "birth_year": 1970,
+  "death_year": null,
+
+  "also_known_as": [
+    "Chris Nolan"
+  ],
+
+  "external_ids": {
+    "wikidata": "Q25191",
+    "imdb": "nm0634240"
+  },
+
+  "last_updated": "2025-01-01"
+}
+```
+
+---
+
+## 7. Index Files
+
+Index files are **generated**, not manually maintained.
+
+### 7.1 Movie Index (`data/movies/index.json`)
+
+Minimal, discovery-focused file:
+
+```json
+[
+  {
+    "id": "m_inception_2010",
+    "title": "Inception",
+    "year": 2010,
+    "type": "movie",
+    "runtime_minutes": 148,
+    "path": "data/movies/inception-2010.json"
+  },
+  {
+    "id": "m_the_social_network_2010",
+    "title": "The Social Network",
+    "year": 2010,
+    "type": "movie",
+    "runtime_minutes": 120,
+    "path": "data/movies/the-social-network-2010.json"
+  }
+]
+```
+
+### 7.2 Series Index (`data/series/index.json`)
+
+```json
+[
+  {
+    "id": "s_breaking_bad",
+    "title": "Breaking Bad",
+    "start_year": 2008,
+    "end_year": 2013,
+    "path": "data/series/breaking-bad/meta.json"
+  }
+]
+```
+
+### 7.3 People Index (`mmdb-people/data/people/index.json`)
+
+```json
+[
+  {
+    "id": "p_christopher_nolan",
+    "name": "Christopher Nolan",
+    "birth_year": 1970,
+    "path": "data/people/p_christopher_nolan.json"
+  },
+  {
+    "id": "p_leonardo_dicaprio",
+    "name": "Leonardo DiCaprio",
+    "birth_year": 1974,
+    "path": "data/people/p_leonardo_dicaprio.json"
+  }
+]
+```
+
+### 7.4 Index Generation
+
+`mmdb-schema-and-tools/tools/build-indexes.ts`:
+
+- Scans `data/movies/*.json` (excluding `index.json`).
+- Extracts summary fields.
+- Writes sorted `index.json`.
+- Similar for `series/`, `people/`.
+
+This script is run:
+
+- Locally by maintainers.
+- In CI to ensure indexes are consistent.
+
+
+---
+
+## 8. Stability Contract
+
+Documented in `mmdb-schema-and-tools/docs/architecture.md` and referenced in every repo:
+
+1. **IDs are permanent**  
+   - Once an `id` is assigned to a title or person, it is never reused for a different entity.
+
+2. **No forced history rewrites**  
+   - No `git push --force` on main branches of data repos.
+
+3. **Schema changes are versioned**  
+   - Every JSON object has `schema_version`.
+   - New schema versions are introduced in `mmdb-schema-and-tools`.
+   - Old versions are deprecated but not retroactively broken.
+
+4. **Deprecation instead of removal**  
+   - Incorrect titles are marked with `"deprecated": true` and a `deprecation_reason`.
+   - Files may remain but be flagged, rather than silently removed.
+
+5. **Indexes are generated**  
+   - `index.json` files are always regenerated by tools and not manually edited.
+
+6. **Org-wide naming & layout conventions**  
+   - All per-year repos follow the same directory structure and JSON naming.
+
+
+---
+
+## 9. Contribution Workflow
+
+High-level flow for a contributor adding or editing a title.
+
+### 9.1 Adding a Movie (example)
+
+1. Fork `mmdb-2010`.
+2. Create new JSON file: `data/movies/inception-2010.json`.
+3. Fill the JSON using the **movie schema**.
+4. Run local tools:
+   - `validate-repo.ts`
+   - `build-indexes.ts`
+5. Commit and open a PR.
+
+CI will:
+
+- Run `validate-repo.ts` (schema & style checks).
+- Run `build-indexes.ts` (if not already run).
+- Fail if inconsistent or invalid.
+
+### 9.2 Adding a Person
+
+Similar:
+
+1. Fork `mmdb-people`.
+2. Add `data/people/p_new_person.json`.
+3. Run validation + index build.
+4. Open PR.
+
+---
+
+## 10. Consumption Patterns (For API Builders)
+
+The MMDB org is intended to be **consumed** like this:
+
+### 10.1 One-shot import
+
+1. Clone or download selected repos (e.g. people + 2010–2020):
+
+   ```bash
+   git clone --depth 1 https://github.com/mmdb/mmdb-people
+   for y in $(seq 2010 2020); do
+     git clone --depth 1 https://github.com/mmdb/mmdb-$y
+   done
+   git clone --depth 1 https://github.com/mmdb/mmdb-schema-and-tools
+   ```
+
+2. Run ETL:
+
+   ```bash
+   cd mmdb-schema-and-tools
+   npm run etl-to-sqlite.ts      --people-repo=../mmdb-people      --year-repos=../mmdb-2010 ../mmdb-2011 ...      --db=media.sqlite
+   ```
+
+3. Your API queries `media.sqlite`, not GitHub.
+
+### 10.2 Incremental Updates
+
+Periodically:
+
+1. `git pull` in each repo.
+2. Run ETL in **incremental mode**:
+   - Script detects changed JSON files (e.g. via `git diff` or `last_updated`).
+   - Upserts only those records in DB.
+
+### 10.3 Direct raw JSON usage (low-volume)
+
+For hobby projects / scripts, people can:
+
+- Fetch `index.json` via raw GitHub URL.
+- Fetch selected title JSON files via URL.
+
+Not recommended as the backend for a large-scale API, but totally fine for small tools and exploration.
+
+
+---
+
+## 11. Automation: Creating Year Repos Programmatically
+
+A script (in `mmdb-schema-and-tools/tools/create-year-repo.ts`) can:
+
+1. Use GitHub API or `gh` CLI to create `mmdb-YYYY`.
+2. Clone it locally.
+3. Populate initial structure:
+
+   ```text
+   data/
+     movies/
+       index.json      # empty array []
+     series/
+       index.json
+   README.md
+   LICENSE
+   .github/workflows/validate-and-build.yml
+   ```
+
+4. Commit & push initial content.
+5. Update `mmdb-meta/data/repos.json` to include the new repo.
+
+This standardizes creation and avoids drift across year repos.
+
+
+---
+
+## 12. CI / GitHub Actions
+
+Each data repo (`mmdb-YYYY`, `mmdb-people`) can share a common workflow file template:
+
+`.github/workflows/validate-and-build.yml`:
+
+```yaml
+name: Validate and Build Indexes
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: mmdb/mmdb-schema-and-tools
+          path: mmdb-schema-and-tools
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          pip install -r mmdb-schema-and-tools/requirements.txt
+      - name: Validate repo
+        run: |
+          npm run --prefix mmdb-schema-and-tools validate-repo.ts --repo-path .
+      - name: Build indexes
+        run: |
+          npm run --prefix mmdb-schema-and-tools build-indexes.ts --repo-path .
+      - name: Check for uncommitted changes (index files)
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Index files or auto-generated content not committed. Run build-indexes.ts locally and commit the changes."
+            git status
+            exit 1
+          fi
+```
+
+(This is blueprint-level YAML; details can be adjusted.)
+
+---
+
+## 13. Schema Evolution Strategy
+
+1. Start with `schema_version: 1` for all entity types.
+2. When schema changes significantly:
+   - Create `movie-v2.json` in `mmdb-schema-and-tools/schema/`.
+   - Update tools to understand both v1 and v2.
+   - New or migrated files use `schema_version: 2`.
+
+3. Deprecating fields:
+   - Mark deprecated fields in schema docs.
+   - Avoid sudden deletions that break existing consumers.
+
+4. Potential future approach:
+   - Provide a `migration` tool that can rewrite v1 → v2 for a repo, if desired.
+
+
+---
+
+## 14. Roadmap Ideas (Optional Extensions)
+
+- **Genres, languages, countries as canonical lists**  
+  - `mmdb-taxonomy` repo with well-defined enums.
+
+- **Ratings & certifications**  
+  - Separate repo or extension to per-title JSON.
+
+- **Streaming availability**  
+  - Possibly separate from core MMDB to avoid churning data.
+
+- **Data sourcing pipelines**  
+  - Scripts that periodically pull from Wikidata / other sources to propose new or updated MMDB entries.
+
+- **Website / documentation**  
+  - Docs site that uses `mmdb-meta` + schema docs to explain the ecosystem.
+
+---
+
+## 15. Summary
+
+This blueprint defines:
+
+- A **GitHub-centric architecture** where the **org is the database**, sharded by **year** and **entity type**.
+- A **per-title JSON + index** model, stable IDs, and versioned schemas.
+- Clear **repo structures**, **file naming**, and **data model** for movies, series, seasons, episodes, and people.
+- A **stability contract** and CI flow to keep repos consistent.
+- A consumption model where MMDB is the **source-of-truth**, and downstream projects build their **own optimized databases and APIs** on top of it.
+
+You can use this as the starting spec to create:
+
+- The `mmdb` organization,
+- The first few year repos,
+- The `mmdb-people` and `mmdb-schema-and-tools` repos,
+- And then begin populating data incrementally, forever.
+
+---
+
+## 15.1 Tech Stack & Implementation Decisions
+
+### Language & Runtime
+**Node.js + TypeScript** chosen for:
+- Native Firebase Admin SDK integration
+- Excellent GitHub API support (Octokit)
+- Zero-overhead JSON handling
+- Faster Cloud Function cold starts vs Python
+- Better cost efficiency (faster execution)
+- Consistent runtime across all tooling
+
+### Development Phases
+
+**Phase 1: Foundation** (Cost: $0)
+- JSON Schema definitions (movie, series, season, episode, person)
+- Core tooling: validation, index building, repo scaffolding
+- Initial repos: `mmdb-schema-and-tools`, `mmdb-people`, `mmdb-meta`, `mmdb-2010`
+- GitHub Actions CI/CD workflows
+- Manual data entry for initial testing
+
+**Phase 2: Local Ingestion** (Cost: $0)
+- Node.js script runs on developer machine
+- Local state file (`ingestion-state.json`)
+- GitHub API integration for automated PRs
+- Manual or cron-based execution
+- Suitable for bootstrapping phase
+
+**Phase 3: Serverless Ingestion** (Cost: $0 within free tier)
+- Cloud Functions (2nd gen) deployment
+- Firestore state management
+- Cloud Scheduler triggers
+- Same core logic as Phase 2
+- Scales to ~100 titles/day within free tier
+
+### Cost Constraints
+- Target: ≤10 MXN/month
+- Actual: $0 for all phases (within Firebase free tier)
+- Free tier limits:
+  - Cloud Scheduler: 3 jobs free (need 1)
+  - Cloud Functions: 2M invocations, 400K GB-seconds free
+  - Firestore: 50K reads, 20K writes/day free
+  - All phases stay well within limits
+
+
+---
+
+# 16. Ingestion Pipeline (“Feeding the Database”)
+
+This section defines how MMDB can be continuously and safely populated using automated, low-cost, rate-limit–friendly methods.
+
+## 16.1 Goals
+
+- Keep ingestion **fully automated**, **low-cost**, and **polite** toward external services.
+- Avoid hitting **GitHub rate limits** or **Wikidata SPARQL endpoint limits**.
+- Ensure all added/updated data flows through **pull requests**, never direct commits.
+- Maintain a **steady trickle** of new content over months/years.
+
+---
+
+## 16.2 Architecture Overview
+
+MMDB ingestion supports **two deployment modes**:
+
+### Mode A: Local Script (Phase 2 - Initial Development)
+- **Node.js/TypeScript script** runs on developer's local machine
+- **Local JSON file** (`ingestion-state.json`) holds state
+- **GitHub API** (via Octokit) writes branches + PRs to MMDB repos
+- **Manual or cron execution** - runs when PC is on
+- **Cost**: $0 - no cloud resources needed
+
+### Mode B: Serverless (Phase 3 - Production)
+- **Cloud Scheduler** triggers daily run  
+- **Cloud Function (2nd gen)** performs ingestion  
+- **Firestore** holds ingestion state  
+- **GitHub API** writes branches + PRs to MMDB repos
+- **Cost**: $0 (within Firebase free tier for ~100 titles/day)
+
+**Migration Path**: The core ingestion logic is identical between modes. Only the state storage (local JSON vs Firestore) and trigger mechanism (manual/cron vs Cloud Scheduler) differ.
+
+Everything is stateless except a small "cursor" (offsets, lastModified timestamps).
+---
+
+## 16.3 Ingestion Phases
+
+Each daily run performs two complementary passes:
+
+### A. Backlog Pass (historical data)
+Fetches older titles that have not yet been imported.
+
+- SPARQL query using `LIMIT` + `OFFSET`
+- Ordered by release year ascending
+- Controlled by `backlog_offset` in state
+
+### B. Recent-Pass (updates & newly created items)
+Fetches titles edited recently.
+
+- SPARQL query filtered by `schema:dateModified`
+- Controlled by `last_recent_timestamp` in state
+
+**This ensures MMDB grows by filling older gaps AND staying fresh.**
+
+---
+
+## 16.4 Rate-Friendly Behavior
+
+- Hard daily caps (example):
+  - **60** backlog titles  
+  - **40** recent titles  
+  - **≤100** titles/day total  
+- Throttle Wikidata queries with sleep and proper `User-Agent`
+- Batch GitHub modifications:
+  - **One PR per repo per day**
+  - Up to a few dozen file changes per PR
+
+With these constraints, MMDB stays far below GitHub & Wikidata rate limits.
+
+---
+
+## 16.5 Normalization Workflow
+
+For each harvested title:
+
+1. Determine release year  
+2. Map to `mmdb-YYYY` repo  
+3. Generate MMDB IDs  
+4. Produce movie/series/season/episode JSON  
+5. Fetch/build person JSON in `mmdb-people`  
+6. Validate using `validate-repo.ts`  
+7. Add to a local commit batch for that repo  
+
+If the title is already present, update fields as needed (optional).
+
+---
+
+## 16.6 Publishing Workflow (GitHub)
+
+Two supported modes:
+
+### Option A — Pure GitHub API (recommended for Cloud Functions)
+
+- Create a branch via API
+- Create/update files via GitHub “Contents API”
+- Create PR via REST/GraphQL
+
+Pros:
+- No need to clone repos
+- Works perfectly inside Cloud Functions
+
+### Option B — Ephemeral git clone (recommended for Cloud Run Jobs)
+
+- Clone repo into /tmp
+- Apply changes locally
+- Run validation + index builder for real
+- Commit + push
+- Create PR
+
+Pros:
+- Closest to manual editing workflow  
+- Uses fewer REST API calls  
+
+---
+
+## 16.7 State Storage
+
+Stored in a single Firestore document or Cloud Storage JSON file:
+
+```json
+{
+  "backlog_offset": 12345,
+  "last_recent_timestamp": "2025-12-10T00:00:00Z",
+  "last_run": "2025-12-11T00:00:00Z"
+}
+```
+
+This keeps ingestion stateless and resilient.
+
+---
+
+## 16.8 Daily Cron Execution Outline
+
+1. Load ingestion state  
+2. Query backlog (`LIMIT 60 OFFSET backlog_offset`)  
+3. Query recent (`schema:dateModified > last_recent_timestamp`)  
+4. Normalize entities  
+5. Generate/update JSON files  
+6. Validate & rebuild indexes  
+7. Push to branches  
+8. Submit 1 PR per repo touched  
+9. Update ingestion state and store it  
+
+Errors are logged; the next run resumes automatically.
+
+---
+
+## 16.9 Ingestion Safety Rules
+
+- All imported data must pass schema validation.  
+- All changes must enter via PR, not direct commits.  
+- PRs are labeled: `auto-import`, `from-wikidata`.  
+- Optionally require human review for complex cases.  
+
+---
+
+## 16.10 Running Without a VM
+
+The ingestion pipeline runs entirely serverlessly:
+
+### Cloud Scheduler → Cloud Function → GitHub PRs
+
+Benefits:
+- No VM or persistent disk
+- Extremely cheap (fractions of a dollar/month)
+- Scales naturally as MMDB grows
+
+---
+
+# 17. Summary Addendum
+
+These ingestion techniques turn MMDB into a **self-expanding, indefinitely growing media database**, supplied automatically from Wikidata/Wikipedia, rate-limited and controlled, with all changes funneled into GitHub PRs for stability and transparency.

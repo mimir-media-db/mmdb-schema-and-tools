@@ -1,0 +1,10 @@
+[
+  {
+    "id": "m_inception_2010",
+    "title": "Inception",
+    "year": 2010,
+    "type": "movie",
+    "runtime_minutes": 148,
+    "path": "data/movies/inception-2010.json"
+  }
+]

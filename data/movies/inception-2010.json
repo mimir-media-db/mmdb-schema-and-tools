@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "m_inception_2010",
+  "title": "Inception",
+  "year": 2010,
+  "release_date": "2010-07-16",
+  "type": "movie",
+  "runtime_minutes": 148,
+  "original_language": "en",
+  "countries": ["US", "GB"],
+  "summary": "A thief who steals corporate secrets through dream-sharing technology is given the inverse task of planting an idea into the mind of a C.E.O.",
+  "genres": ["science fiction", "action", "thriller"],
+  "directors": ["p_christopher_nolan"],
+  "writers": ["p_christopher_nolan"],
+  "cast": ["p_leonardo_dicaprio"],
+  "external_ids": {
+    "wikidata": "Q43320",
+    "imdb": "tt1375666",
+    "tmdb": 27205
+  },
+  "last_updated": "2026-01-19"
+}

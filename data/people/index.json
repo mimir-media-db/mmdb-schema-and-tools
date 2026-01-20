@@ -1,0 +1,14 @@
+[
+  {
+    "id": "p_christopher_nolan",
+    "name": "Christopher Nolan",
+    "birth_year": 1970,
+    "path": "data/people/p_christopher_nolan.json"
+  },
+  {
+    "id": "p_leonardo_dicaprio",
+    "name": "Leonardo DiCaprio",
+    "birth_year": 1974,
+    "path": "data/people/p_leonardo_dicaprio.json"
+  }
+]
