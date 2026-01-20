@@ -26,6 +26,30 @@ export class GitHubClient {
     });
   }
   
+  async getExistingMovieIds(repo: string, branch: string = 'master'): Promise<Set<string>> {
+    try {
+      const { data } = await this.octokit.repos.getContent({
+        owner: this.owner,
+        repo,
+        path: 'data/movies/index.json',
+        ref: branch
+      });
+      
+      if ('content' in data) {
+        const content = Buffer.from(data.content, 'base64').toString('utf-8');
+        const index = JSON.parse(content);
+        return new Set(index.map((entry: any) => entry.id));
+      }
+    } catch (error: any) {
+      if (error.status === 404) {
+        return new Set();
+      }
+      throw error;
+    }
+    
+    return new Set();
+  }
+  
   async createOrUpdateFile(
     repo: string,
     branch: string,

@@ -4,7 +4,7 @@
     "module": "ES2022",
     "moduleResolution": "node",
     "outDir": "./dist",
-    "rootDir": "./tools",
+    "rootDir": "./tools/src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -12,6 +12,6 @@
     "resolveJsonModule": true,
     "declaration": true
   },
-  "include": ["tools/src/**/*", "tools/test/**/*"],
+  "include": ["tools/src/**/*"],
   "exclude": ["node_modules", "dist"]
 }

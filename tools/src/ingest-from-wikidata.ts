@@ -71,15 +71,29 @@ async function main() {
   console.log(`Creating branch: ${branchName}`);
   await github.createBranch(repo, branchName);
   
+  // Get existing movie IDs to prevent duplicates
+  console.log('Checking for existing movies...');
+  const existingIds = await github.getExistingMovieIds(repo);
+  console.log(`Found ${existingIds.size} existing movies\n`);
+  
   // Process movies
   let added = 0;
+  let skipped = 0;
   for (const wikiMovie of movies) {
     const movie = normalizeMovie(wikiMovie);
+    
+    // Check for duplicates
+    if (existingIds.has(movie.id)) {
+      console.log(`⊘ Skipping ${movie.title}: already exists (${movie.id})`);
+      skipped++;
+      continue;
+    }
     
     // Validate
     if (!validator.validate(movie)) {
       console.log(`✗ Skipping ${movie.title}: validation failed`);
       console.log(validator.errors);
+      skipped++;
       continue;
     }
     
@@ -97,10 +111,12 @@ async function main() {
       `Add ${added} movies from ${year}`,
       branchName,
       'master',
-      `Automated ingestion from Wikidata.\n\nMovies added: ${added}`
+      `Automated ingestion from Wikidata.\n\nMovies added: ${added}\nMovies skipped: ${skipped} (duplicates or validation failures)`
     );
     
     console.log(`✓ Pull request created: #${prNumber}`);
+  } else {
+    console.log(`\nNo new movies to add (${skipped} skipped)`);
   }
   
   // Update state
@@ -109,7 +125,7 @@ async function main() {
   state.lastRun = new Date().toISOString();
   saveState(state);
   
-  console.log(`\nIngestion complete. Processed: ${added}/${movies.length}`);
+  console.log(`\nIngestion complete. Added: ${added}, Skipped: ${skipped}`);
 }
 
 main().catch(error => {
