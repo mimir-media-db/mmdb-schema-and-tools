@@ -50,6 +50,57 @@ export class GitHubClient {
     return new Set();
   }
   
+  async getMoviesInPendingPRs(repo: string): Promise<Set<string>> {
+    const movieIds = new Set<string>();
+    
+    try {
+      // Get all open PRs
+      const { data: prs } = await this.octokit.pulls.list({
+        owner: this.owner,
+        repo,
+        state: 'open'
+      });
+      
+      // For each PR, get the files and extract movie IDs
+      for (const pr of prs) {
+        const { data: files } = await this.octokit.pulls.listFiles({
+          owner: this.owner,
+          repo,
+          pull_number: pr.number
+        });
+        
+        // Extract movie IDs from filenames in data/movies/
+        for (const file of files) {
+          if (file.filename.startsWith('data/movies/') && file.filename.endsWith('.json') && file.filename !== 'data/movies/index.json') {
+            // Get the file content to extract the ID
+            try {
+              const { data: content } = await this.octokit.repos.getContent({
+                owner: this.owner,
+                repo,
+                path: file.filename,
+                ref: pr.head.ref
+              });
+              
+              if ('content' in content) {
+                const movieData = JSON.parse(Buffer.from(content.content, 'base64').toString('utf-8'));
+                if (movieData.id) {
+                  movieIds.add(movieData.id);
+                }
+              }
+            } catch (error) {
+              // Skip if file can't be read
+              continue;
+            }
+          }
+        }
+      }
+    } catch (error: any) {
+      console.warn('Warning: Could not fetch pending PRs:', error.message);
+    }
+    
+    return movieIds;
+  }
+  
   async createOrUpdateFile(
     repo: string,
     branch: string,

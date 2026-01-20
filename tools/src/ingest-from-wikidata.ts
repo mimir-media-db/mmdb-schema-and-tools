@@ -1,38 +1,8 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { buildMovieQuery, queryWikidata, parseMovieResults } from './ingestion/wikidata-client.js';
 import { normalizeMovie } from './ingestion/normalizer.js';
 import { GitHubClient } from './ingestion/github-client.js';
 import { loadSchema } from './shared-config.js';
-
-interface IngestionState {
-  year: number;
-  offset: number;
-  totalProcessed: number;
-  lastRun: string;
-}
-
-const STATE_FILE = '.ingestion-state.json';
-
-function loadState(year: number): IngestionState {
-  if (existsSync(STATE_FILE)) {
-    const state = JSON.parse(readFileSync(STATE_FILE, 'utf-8'));
-    if (state.year === year) {
-      return state;
-    }
-  }
-  
-  return {
-    year,
-    offset: 0,
-    totalProcessed: 0,
-    lastRun: new Date().toISOString()
-  };
-}
-
-function saveState(state: IngestionState): void {
-  writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), 'utf-8');
-}
 
 async function main() {
   const args = process.argv.slice(2);
@@ -47,44 +17,55 @@ async function main() {
   
   console.log(`Starting ingestion for year ${year} (limit: ${limit})\n`);
   
-  const state = loadState(year);
   const github = new GitHubClient(token);
   const validator = loadSchema('movie-v1');
+  const repo = `mmdb-${year}`;
   
-  // Query Wikidata
+  // Get existing movies from master (source of truth)
+  console.log('Checking for existing movies in master...');
+  const existingIds = await github.getExistingMovieIds(repo);
+  console.log(`Found ${existingIds.size} existing movies\n`);
+  
+  // Get movies from pending PRs (to avoid duplicates)
+  console.log('Checking for movies in pending PRs...');
+  const pendingIds = await github.getMoviesInPendingPRs(repo);
+  console.log(`Found ${pendingIds.size} movies in pending PRs\n`);
+  
+  // Query Wikidata - fetch more than we need to account for duplicates
   console.log('Querying Wikidata...');
-  const sparql = buildMovieQuery(year, limit, state.offset);
+  const sparql = buildMovieQuery(year, limit * 3, 0); // Fetch 3x to ensure we get enough unique ones
   const results = await queryWikidata(sparql);
   const movies = parseMovieResults(results);
   
-  console.log(`Found ${movies.length} movies\n`);
+  console.log(`Found ${movies.length} movies from Wikidata\n`);
   
   if (movies.length === 0) {
     console.log('No more movies to process');
     return;
   }
   
-  // Create branch
-  const branchName = `ingest-${year}-${Date.now()}`;
-  const repo = `mmdb-${year}`;
-  
-  console.log(`Creating branch: ${branchName}`);
-  await github.createBranch(repo, branchName);
-  
-  // Get existing movie IDs to prevent duplicates
-  console.log('Checking for existing movies...');
-  const existingIds = await github.getExistingMovieIds(repo);
-  console.log(`Found ${existingIds.size} existing movies\n`);
-  
-  // Process movies
-  let added = 0;
+  // Filter and validate movies
+  const moviesToAdd: any[] = [];
   let skipped = 0;
+  
   for (const wikiMovie of movies) {
+    // Stop if we have enough movies
+    if (moviesToAdd.length >= limit) {
+      break;
+    }
+    
     const movie = normalizeMovie(wikiMovie);
     
-    // Check for duplicates
+    // Check for duplicates in master branch
     if (existingIds.has(movie.id)) {
-      console.log(`⊘ Skipping ${movie.title}: already exists (${movie.id})`);
+      console.log(`⊘ Skipping ${movie.title}: already exists in master (${movie.id})`);
+      skipped++;
+      continue;
+    }
+    
+    // Check for duplicates in pending PRs
+    if (pendingIds.has(movie.id)) {
+      console.log(`⊘ Skipping ${movie.title}: already in pending PR (${movie.id})`);
       skipped++;
       continue;
     }
@@ -97,33 +78,39 @@ async function main() {
       continue;
     }
     
-    // Add to PR
+    moviesToAdd.push(movie);
+    console.log(`✓ Will add ${movie.title} (${movie.id})`);
+  }
+  
+  // Create PR if we have movies
+  if (moviesToAdd.length === 0) {
+    console.log(`\nNo new movies to add (${skipped} skipped)`);
+    return;
+  }
+  
+  // Create branch
+  const branchName = `ingest-${year}-${Date.now()}`;
+  console.log(`\nCreating branch: ${branchName}`);
+  await github.createBranch(repo, branchName);
+  
+  // Add movies to PR
+  let added = 0;
+  for (const movie of moviesToAdd) {
     await github.addMovieToPR(repo, branchName, movie);
-    console.log(`✓ Added ${movie.title} (${movie.id})`);
     added++;
   }
   
-  // Create PR
-  if (added > 0) {
-    console.log(`\nCreating pull request...`);
-    const prNumber = await github.createPullRequest(
-      repo,
-      `Add ${added} movies from ${year}`,
-      branchName,
-      'master',
-      `Automated ingestion from Wikidata.\n\nMovies added: ${added}\nMovies skipped: ${skipped} (duplicates or validation failures)`
-    );
-    
-    console.log(`✓ Pull request created: #${prNumber}`);
-  } else {
-    console.log(`\nNo new movies to add (${skipped} skipped)`);
-  }
+  // Create PR (we know added > 0 because we checked before creating branch)
+  console.log(`\nCreating pull request...`);
+  const prNumber = await github.createPullRequest(
+    repo,
+    `Add ${added} movies from ${year}`,
+    branchName,
+    'master',
+    `Automated ingestion from Wikidata.\n\nMovies added: ${added}\nMovies skipped: ${skipped} (duplicates or validation failures)`
+  );
   
-  // Update state
-  state.offset += limit;
-  state.totalProcessed += added;
-  state.lastRun = new Date().toISOString();
-  saveState(state);
+  console.log(`✓ Pull request created: #${prNumber}`);
   
   console.log(`\nIngestion complete. Added: ${added}, Skipped: ${skipped}`);
 }

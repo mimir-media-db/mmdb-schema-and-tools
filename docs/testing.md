@@ -24,6 +24,20 @@ tools/
 
 ## Test Coverage
 
+### Duplicate Prevention Tests (10 tests)
+- Skip movies in master branch
+- Skip movies in pending PRs
+- Skip movies from both master and pending PRs
+- Collect exactly limit movies when enough available
+- Handle case where not enough unique movies available
+- Return empty when all movies are duplicates
+- Process all movies when no duplicates
+- Handle empty movie list
+- Handle empty existing/pending sets
+- Stop collecting after reaching limit
+
+**Note**: Tests validate GitHub-based state management (no local files)
+
 ### ID Generator Tests (10 tests)
 - `generateSlug()` - Converts titles to URL-safe slugs
   - Basic titles
@@ -50,6 +64,17 @@ tools/
 - `parseMovieResults()` - Parses Wikidata API responses
   - Complete movie data
   - Missing optional fields
+
+## Test Files
+
+```
+tools/
+  test/
+    duplicate-prevention.test.ts  # PR duplicate prevention tests
+    id-generator.test.ts          # ID and slug generation tests
+    normalizer.test.ts            # Data normalization tests
+    wikidata-client.test.ts       # Wikidata query and parsing tests
+```
 
 ## Writing New Tests
 
@@ -84,13 +109,19 @@ node --test dist/test/id-generator.test.js
 
 ## Test Results
 
-Current coverage: **17 tests, 17 passing**
+Current coverage: **27 tests, 27 passing**
 
 ```
-# tests 17
-# pass 17
+# tests 27
+# pass 27
 # fail 0
 ```
+
+### Test Breakdown
+- Duplicate Prevention: 10 tests ✅
+- ID Generator: 10 tests ✅
+- Normalizer: 3 tests ✅
+- Wikidata Client: 4 tests ✅
 
 ## CI/CD Integration
 
