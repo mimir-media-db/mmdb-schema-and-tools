@@ -148,6 +148,8 @@ npx mmdb-build-indexes
 - [Contribution Guide](docs/contribution-guide.md) – How to add/edit data
 - [Progress Tracking](docs/progress.md) – Current status and milestones
 - [Known Issues](docs/bugs.md) – Bug tracking and resolutions
+- [Ingestion Guide](docs/ingestion.md) – Automated data import from Wikidata
+- [Testing Guide](docs/testing.md) – Running and writing tests
 
 ## Tech Stack
 
