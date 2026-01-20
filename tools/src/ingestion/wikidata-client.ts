@@ -13,6 +13,15 @@ export interface WikidataMovie {
   cast?: string[];
 }
 
+export interface WikidataPerson {
+  id: string;
+  label: string;
+  birthYear?: number;
+  deathYear?: number;
+  imdbId?: string;
+  wikidataId: string;
+}
+
 export function buildMovieQuery(year: number, limit: number = 100, offset: number = 0): string {
   return `
 SELECT DISTINCT ?film ?filmLabel ?year ?imdb ?tmdb ?releaseDate ?runtime
@@ -72,4 +81,50 @@ export function parseMovieResults(results: any): WikidataMovie[] {
   }
   
   return movies;
+}
+
+export function buildPersonQuery(limit: number = 100, offset: number = 0): string {
+  return `
+SELECT DISTINCT ?person ?personLabel ?birthDate ?deathDate ?imdb
+WHERE {
+  ?person wdt:P31 wd:Q5.              # instance of human
+  {
+    ?person wdt:P106 wd:Q33999.       # occupation: actor
+  } UNION {
+    ?person wdt:P106 wd:Q2526255.     # occupation: film director
+  } UNION {
+    ?person wdt:P106 wd:Q28389.       # occupation: screenwriter
+  }
+  
+  OPTIONAL { ?person wdt:P569 ?birthDate. }  # date of birth
+  OPTIONAL { ?person wdt:P570 ?deathDate. }  # date of death
+  OPTIONAL { ?person wdt:P345 ?imdb. }       # IMDb ID
+  
+  FILTER(BOUND(?imdb))                       # Must have IMDb ID
+  
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+ORDER BY ?personLabel
+LIMIT ${limit}
+OFFSET ${offset}
+`.trim();
+}
+
+export function parsePersonResults(results: any): WikidataPerson[] {
+  const people: WikidataPerson[] = [];
+  
+  for (const binding of results.results.bindings) {
+    const wikidataId = binding.person.value.split('/').pop();
+    
+    people.push({
+      id: '',
+      label: binding.personLabel?.value || 'Unknown',
+      birthYear: binding.birthDate?.value ? new Date(binding.birthDate.value).getFullYear() : undefined,
+      deathYear: binding.deathDate?.value ? new Date(binding.deathDate.value).getFullYear() : undefined,
+      imdbId: binding.imdb?.value,
+      wikidataId
+    });
+  }
+  
+  return people;
 }

@@ -16,6 +16,7 @@
     "build-indexes": "node dist/build-indexes.js",
     "create-year-repo": "node dist/create-year-repo.js",
     "ingest": "node dist/ingest-from-wikidata.js",
+    "ingest-people": "node dist/ingest-people.js",
     "test": "npm run build:test && node --test dist/test/*.test.js"
   },
   "keywords": ["mmdb", "media", "database", "metadata"],
