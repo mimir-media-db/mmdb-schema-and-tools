@@ -18,7 +18,7 @@ data/
 
 ## Contributing
 
-See [mmdb-schema-and-tools](https://github.com/mmdb/mmdb-schema-and-tools) for contribution guidelines.
+See [mmdb-schema-and-tools](https://github.com/mimir-media-db/mmdb-schema-and-tools) for contribution guidelines.
 
 ## License
 

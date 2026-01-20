@@ -604,11 +604,11 @@ The MMDB org is intended to be **consumed** like this:
 1. Clone or download selected repos (e.g. people + 2010–2020):
 
    ```bash
-   git clone --depth 1 https://github.com/mmdb/mmdb-people
+   git clone --depth 1 https://github.com/mimir-media-db/mmdb-people
    for y in $(seq 2010 2020); do
-     git clone --depth 1 https://github.com/mmdb/mmdb-$y
+     git clone --depth 1 https://github.com/mimir-media-db/mmdb-$y
    done
-   git clone --depth 1 https://github.com/mmdb/mmdb-schema-and-tools
+   git clone --depth 1 https://github.com/mimir-media-db/mmdb-schema-and-tools
    ```
 
 2. Run ETL:

@@ -106,8 +106,8 @@ mmdb-meta/            # Cross-repo metadata
 
 ```bash
 # Clone the data repos you need
-git clone --depth 1 https://github.com/mmdb/mmdb-people
-git clone --depth 1 https://github.com/mmdb/mmdb-2010
+git clone --depth 1 https://github.com/mimir-media-db/mmdb-people
+git clone --depth 1 https://github.com/mimir-media-db/mmdb-2010
 
 # Install tools
 npm install -g mmdb-schema-and-tools
