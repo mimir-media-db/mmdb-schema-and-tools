@@ -70,18 +70,21 @@
 
 ---
 
-### Phase 2: Local Ingestion ✅ COMPLETE
+### Phase 2: Local Ingestion ✅ COMPLETE (Movies Only)
 
 #### Stage 2.1: Wikidata Integration ✅
-- [x] SPARQL query builder
-- [x] Wikidata entity parser
+- [x] SPARQL query builder (movies)
+- [x] Wikidata entity parser (movies)
 - [x] External ID mapping (Wikidata, IMDb, TMDB)
 - [x] Rate limiting and error handling
 
 #### Stage 2.2: Data Normalization ✅
 - [x] MMDB ID generator (slugs)
-- [x] Entity normalizer (Wikidata → MMDB)
-- [x] Duplicate detection
+- [x] Entity normalizer (Wikidata → MMDB, movies only)
+- [x] Duplicate detection (GitHub-based)
+  - [x] Check master branch for existing movies
+  - [x] Scan pending PRs for in-flight movies
+  - [x] Collect exactly N unique movies per run
 - [x] Validation integration
 
 #### Stage 2.3: GitHub Integration ✅
@@ -90,22 +93,28 @@
 - [x] File creation/update via API
 - [x] PR creation with labels
 - [x] Batch operations
+- [x] Scan pending PRs for duplicate prevention
 
-#### Stage 2.4: Ingestion Script ✅
-- [x] State management (local JSON file)
+#### Stage 2.4: Ingestion Script (Movies) ✅
+- [x] GitHub-based state management (no local files)
 - [x] Main ingestion loop
 - [x] Error handling and logging
 - [x] CLI interface with options
 
 #### Stage 2.5: Testing & Documentation ✅
-- [x] Unit tests (17 tests, all passing)
+- [x] Unit tests (27 tests, all passing)
   - ID generator tests (10)
   - Normalizer tests (3)
   - Wikidata client tests (4)
+  - Duplicate prevention tests (10)
 - [x] Testing documentation
 - [x] Ingestion documentation
 
-**Phase 2 Status**: ✅ 100% Complete (Ready for Live Testing)
+#### Stage 2.6: Extend to Other Entity Types ⏳
+- [ ] People ingestion (replicate GitHub-based duplicate prevention)
+- [ ] Series ingestion (replicate GitHub-based duplicate prevention)
+
+**Phase 2 Status**: ✅ Movies complete, ⏳ People/Series pending
 
 ---
 
@@ -158,7 +167,17 @@
 ## Recent Activity
 
 ### 2026-01-20
-- ✅ Completed Phase 2 implementation
+- ✅ Refactored ingestion to use GitHub-based state management
+- ✅ Removed local state files (.ingestion-state.json)
+- ✅ Added getMoviesInPendingPRs() to scan open PRs
+- ✅ Implemented duplicate prevention (master + pending PRs)
+- ✅ Added 10 unit tests for duplicate prevention
+- ✅ Updated documentation (ingestion, testing, dev-plan)
+- ✅ All 27 tests passing
+- ✅ Documented GitHub-based approach for replication
+
+### Earlier (2026-01-20)
+- ✅ Completed Phase 2 implementation (movies)
 - ✅ Created Wikidata SPARQL client
 - ✅ Built data normalizer (Wikidata → MMDB)
 - ✅ Implemented GitHub API client
@@ -192,18 +211,19 @@
 
 ### Code
 - **Repositories**: 4 created and published ✅
-- **Lines of code**: ~2000+ ✅
-- **Test coverage**: 17 tests, 100% passing ✅
+- **Lines of code**: ~2500+ ✅
+- **Test coverage**: 27 tests, 100% passing ✅
 
 ### Data
-- **Movies**: 3 (Inception, The Social Network, Toy Story 3)
+- **Movies**: 8 in master, 7 in pending PRs
 - **People**: 2 (Christopher Nolan, Leonardo DiCaprio)
 - **Repos with data**: 2 (mmdb-2010, mmdb-people)
 
 ### Quality
 - **Schema validation**: Working ✅
 - **CI/CD pass rate**: 100% ✅
-- **Unit tests**: 17/17 passing ✅
+- **Unit tests**: 27/27 passing ✅
+- **Duplicate prevention**: GitHub-based ✅
 
 ### Community
 - **Contributors**: 1 (core team)
