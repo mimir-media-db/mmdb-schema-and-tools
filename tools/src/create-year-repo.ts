@@ -37,17 +37,16 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Install tools
-        run: |
-          npm install -g mmdb-schema-and-tools
+      - name: Install dependencies
+        run: npm install
       - name: Validate
-        run: mmdb-validate --repo-path=.
+        run: npm run validate
       - name: Build indexes
-        run: mmdb-build-indexes --repo-path=.
+        run: npm run build-indexes
 `;
 
 function main() {
