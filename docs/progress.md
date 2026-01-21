@@ -166,6 +166,30 @@
 
 ## Recent Activity
 
+### 2026-01-21
+- ⏳ **Stage 2.6.1: People Ingestion - IN PROGRESS**
+  - ✅ Added WikidataPerson interface and buildPersonQuery()
+  - ✅ Created normalizePerson() function
+  - ✅ Added GitHub client methods (getExistingPeopleIds, getPeopleInPendingPRs, addPersonToPR)
+  - ✅ Created ingest-people.ts script with duplicate prevention
+  - ✅ Added rate limiting (1 second delay) for Wikidata queries
+  - ✅ Successfully created PRs with people data
+  - ❌ **BLOCKER: Wikidata label service not returning person names**
+    - Issue: `?personLabel` returns Wikidata IDs (e.g., "Q102337653") instead of actual names
+    - Tried: Automatic label service, rdfs:label with FILTER, manual label service
+    - Research: Reviewed Wikidata SPARQL optimization docs and label service documentation
+    - Root cause: Some Wikidata entities lack English labels, label service falls back to ID
+    - Query complexity: Broad queries (all actors with IMDb) timeout; narrowed to birth year filter
+    - Current state: Query works but returns unusable data (IDs instead of names)
+  - **Next steps needed:**
+    - Option 1: Filter query to only include entities with English labels
+    - Option 2: Use IMDb API to fetch names as fallback
+    - Option 3: Query different Wikidata properties or use alternative data source
+    - Option 4: Accept limitation and manually curate people data
+  - **Commits:**
+    - `137deb2` - Add people ingestion with duplicate prevention
+    - Rate limiting and query optimization (uncommitted)
+
 ### 2026-01-20
 - ✅ Refactored ingestion to use GitHub-based state management
 - ✅ Removed local state files (.ingestion-state.json)
@@ -175,6 +199,10 @@
 - ✅ Updated documentation (ingestion, testing, dev-plan)
 - ✅ All 27 tests passing
 - ✅ Documented GitHub-based approach for replication
+- **Commits:**
+  - `655260a` - Refactor ingestion to use GitHub-based state
+  - `fc9c90f` - Document GitHub-based duplicate prevention
+  - `b8faebd` - Update progress with GitHub-based state work
 
 ### Earlier (2026-01-20)
 - ✅ Completed Phase 2 implementation (movies)
@@ -245,11 +273,17 @@
 **Status**: 6/6 criteria met ✅
 
 ### Phase 2 Success Criteria
-- [x] Ingestion script runs successfully
+- [x] Ingestion script runs successfully (movies)
 - [x] Can import 100 titles/day (capability built)
-- [x] PRs are well-formed and valid (to be tested live)
-- [x] State persists between runs
+- [x] PRs are well-formed and valid
+- [x] State derived from GitHub (no local files)
+- [x] Duplicate prevention working (master + pending PRs)
 - [x] Error handling is robust
+- [x] Documentation for running locally
+- [ ] People ingestion implemented (BLOCKED - see 2026-01-21 activity)
+- [ ] Series ingestion implemented
+
+**Status**: 7/9 criteria met, 1 blocked, 1 pending
 - [x] Documentation for running locally
 
 **Status**: 6/6 criteria met (pending live test) ✅
@@ -280,7 +314,43 @@
 ## Blockers & Issues
 
 ### Current Blockers
-- Environment variable passing for GITHUB_TOKEN (minor - can be resolved)
+
+#### 🔴 CRITICAL: Wikidata Label Service Not Returning Person Names (2026-01-21)
+**Impact**: People ingestion cannot proceed without usable names
+
+**Problem**: 
+- Wikidata SPARQL label service returns entity IDs (e.g., "Q102337653") instead of actual person names
+- Affects people ingestion - PRs are created but contain unusable data
+
+**Root Cause**:
+- Many Wikidata person entities lack English labels
+- Label service falls back to entity ID when no label exists in requested language
+- Broad queries (all actors with IMDb IDs) timeout due to dataset size
+
+**Attempted Solutions**:
+1. ✅ Automatic label service: `SERVICE wikibase:label { bd:serviceParam wikibase:language "[AUTO_LANGUAGE],en". }`
+2. ✅ Manual rdfs:label with FILTER: `?person rdfs:label ?personLabel. FILTER(LANG(?personLabel) = "en")`
+3. ✅ Query optimization: Added birth year filter to reduce dataset size
+4. ✅ Rate limiting: Added 1-second delay between queries
+
+**Research Conducted**:
+- Reviewed Wikidata SPARQL optimization documentation
+- Studied label service behavior and automatic variable population
+- Analyzed query timeout patterns and optimization techniques
+
+**Possible Solutions**:
+1. **Filter for English labels**: Add `FILTER(BOUND(?personLabel))` to exclude entities without labels
+2. **Use IMDb API**: Fetch names from IMDb as fallback using stored IMDb IDs
+3. **Alternative data source**: Query different Wikidata properties or use TMDB/IMDb directly
+4. **Manual curation**: Accept limitation and manually add people data
+5. **Hybrid approach**: Automated ingestion + manual name enrichment
+
+**Decision Needed**: Which approach to pursue for people ingestion?
+
+---
+
+### Minor Issues
+- Environment variable passing for GITHUB_TOKEN (workaround exists)
 
 ### Resolved Issues
 - ✅ Organization name fixed (mmdb → mimir-media-db)
