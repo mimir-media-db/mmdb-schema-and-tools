@@ -106,8 +106,8 @@ MMDB development is organized into three main phases, each building on the previ
   - Rate limiting and throttling
 - [x] Wikidata entity parser
   - Extract movie data
+  - [x] Extract person data (cast, directors, producers)
   - [ ] Extract series/season/episode data
-  - [ ] Extract person data
 - [x] External ID mapping (Wikidata, IMDb, TMDB)
 
 ### Stage 2.2: Data Normalization
@@ -145,22 +145,25 @@ MMDB development is organized into three main phases, each building on the previ
 - [x] CLI interface with options
 
 ### Stage 2.5: Testing & Refinement
-- [x] Unit tests (27 tests, all passing)
+- [x] Unit tests (34 tests, all passing)
   - ID generator tests (10)
   - Normalizer tests (3)
-  - Wikidata client tests (4)
+  - Wikidata client tests - movies (4)
+  - Wikidata client tests - people (7)
   - Duplicate prevention tests (10)
 - [x] Documentation updates
   - Ingestion guide
   - Testing guide
 
 ### Stage 2.6: Extend to Other Entity Types
-- [ ] People ingestion
-  - [ ] SPARQL query for people
-  - [ ] Person normalizer
-  - [ ] Duplicate prevention (same GitHub-based approach)
-  - [ ] Route to mmdb-people repo
-  - [ ] Unit tests
+- [x] People ingestion
+  - [x] SPARQL query for people (movie-based approach)
+  - [x] Person normalizer
+  - [x] Duplicate prevention (GitHub-based, master only)
+  - [x] Route to mmdb-people repo
+  - [x] Unit tests (7 tests)
+  - [x] Fixed Wikidata label issue (rdfs:label filtering)
+  - [x] Query cast (P161), directors (P57), producers (P162)
 - [ ] Series ingestion
   - [ ] SPARQL query for series
   - [ ] Series/season/episode normalizers
@@ -176,7 +179,8 @@ MMDB development is organized into three main phases, each building on the previ
 - ✅ Duplicate prevention working (master + pending PRs)
 - ✅ Error handling is robust
 - ✅ Documentation for running locally
-- [ ] People and series ingestion implemented
+- ✅ People ingestion implemented
+- [ ] Series ingestion implemented
 
 ---
 
