@@ -50,13 +50,18 @@ tools/
 - `generateMovieId()` - Creates movie IDs
 - `generatePersonId()` - Creates person IDs
 
-### Normalizer Tests (3 tests)
+### Normalizer Tests (6 tests)
 - `normalizeMovie()` - Converts Wikidata format to MMDB format
   - Minimal movie (required fields only)
   - Full movie (all optional fields)
   - Special characters in titles
 
-### Wikidata Client Tests (11 tests)
+- `normalizeSeries()` - Converts Wikidata series to MMDB format
+  - Minimal series (required fields only)
+  - Full series (all optional fields)
+  - Ongoing series (no end date)
+
+### Wikidata Client Tests (17 tests)
 
 **Movie Query Tests (4 tests)**
 - `buildMovieQuery()` - Generates SPARQL queries
@@ -78,6 +83,17 @@ tools/
   - Missing optional fields
   - Death date handling
   - Multiple people parsing
+
+**Series Query Tests (6 tests)**
+- `buildSeriesQuery()` - Generates SPARQL for TV series
+  - Default parameters
+  - Custom limit and offset
+  
+- `parseSeriesResults()` - Parses Wikidata series responses
+  - Complete series data
+  - Missing optional fields
+  - Ongoing series (no end date)
+  - Multiple series parsing
 
 ## Test Files
 
@@ -123,20 +139,22 @@ node --test dist/test/id-generator.test.js
 
 ## Test Results
 
-Current coverage: **34 tests, 34 passing**
+Current coverage: **43 tests, 43 passing**
 
 ```
-# tests 34
-# pass 34
+# tests 43
+# pass 43
 # fail 0
 ```
 
 ### Test Breakdown
 - Duplicate Prevention: 10 tests ✅
 - ID Generator: 10 tests ✅
-- Normalizer: 3 tests ✅
+- Normalizer (Movies): 3 tests ✅
+- Normalizer (Series): 3 tests ✅
 - Wikidata Client (Movies): 4 tests ✅
 - Wikidata Client (People): 7 tests ✅
+- Wikidata Client (Series): 6 tests ✅
 
 ## CI/CD Integration
 

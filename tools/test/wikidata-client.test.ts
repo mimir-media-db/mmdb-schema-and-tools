@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { buildMovieQuery, parseMovieResults, buildPersonQueryFromMovies, parsePersonResults } from '../src/ingestion/wikidata-client.js';
+import { buildMovieQuery, parseMovieResults, buildPersonQueryFromMovies, parsePersonResults, buildSeriesQuery, parseSeriesResults } from '../src/ingestion/wikidata-client.js';
 
 test('buildMovieQuery - generates valid SPARQL', () => {
   const query = buildMovieQuery(2010, 10, 0);
@@ -188,4 +188,125 @@ test('parsePersonResults - handles multiple people', () => {
   assert.strictEqual(people.length, 2);
   assert.strictEqual(people[0].label, 'Person One');
   assert.strictEqual(people[1].label, 'Person Two');
+});
+
+
+test('buildSeriesQuery - generates valid SPARQL', () => {
+  const query = buildSeriesQuery(2010, 10, 0);
+  
+  assert.ok(query.includes('?series wdt:P31 wd:Q5398426'));  // television series
+  assert.ok(query.includes('?series wdt:P580 ?startDate'));  // start time
+  assert.ok(query.includes('FILTER(?startYear = 2010)'));
+  assert.ok(query.includes('FILTER(LANG(?seriesLabel) = "en")'));
+  assert.ok(query.includes('LIMIT 10'));
+  assert.ok(query.includes('OFFSET 0'));
+});
+
+test('buildSeriesQuery - with custom limit and offset', () => {
+  const query = buildSeriesQuery(2020, 50, 100);
+  
+  assert.ok(query.includes('FILTER(?startYear = 2020)'));
+  assert.ok(query.includes('LIMIT 50'));
+  assert.ok(query.includes('OFFSET 100'));
+});
+
+test('parseSeriesResults - parses Wikidata series response', () => {
+  const mockResponse = {
+    results: {
+      bindings: [
+        {
+          series: { value: 'http://www.wikidata.org/entity/Q65' },
+          seriesLabel: { value: 'Breaking Bad' },
+          startDate: { value: '2008-01-20T00:00:00Z' },
+          endDate: { value: '2013-09-29T00:00:00Z' },
+          imdb: { value: 'tt0903747' },
+          tmdb: { value: '1396' },
+          seasons: { value: '5' },
+          episodes: { value: '62' }
+        }
+      ]
+    }
+  };
+  
+  const series = parseSeriesResults(mockResponse);
+  
+  assert.strictEqual(series.length, 1);
+  assert.strictEqual(series[0].label, 'Breaking Bad');
+  assert.strictEqual(series[0].wikidataId, 'Q65');
+  assert.strictEqual(series[0].startYear, 2008);
+  assert.strictEqual(series[0].endYear, 2013);
+  assert.strictEqual(series[0].imdbId, 'tt0903747');
+  assert.strictEqual(series[0].tmdbId, 1396);
+  assert.strictEqual(series[0].totalSeasons, 5);
+  assert.strictEqual(series[0].totalEpisodes, 62);
+});
+
+test('parseSeriesResults - handles missing optional fields', () => {
+  const mockResponse = {
+    results: {
+      bindings: [
+        {
+          series: { value: 'http://www.wikidata.org/entity/Q12345' },
+          seriesLabel: { value: 'Test Series' },
+          startDate: { value: '2020-06-15T00:00:00Z' }
+        }
+      ]
+    }
+  };
+  
+  const series = parseSeriesResults(mockResponse);
+  
+  assert.strictEqual(series.length, 1);
+  assert.strictEqual(series[0].label, 'Test Series');
+  assert.strictEqual(series[0].startYear, 2020);
+  assert.strictEqual(series[0].endYear, undefined);
+  assert.strictEqual(series[0].imdbId, undefined);
+  assert.strictEqual(series[0].tmdbId, undefined);
+  assert.strictEqual(series[0].totalSeasons, undefined);
+  assert.strictEqual(series[0].totalEpisodes, undefined);
+});
+
+test('parseSeriesResults - handles ongoing series (no end date)', () => {
+  const mockResponse = {
+    results: {
+      bindings: [
+        {
+          series: { value: 'http://www.wikidata.org/entity/Q123' },
+          seriesLabel: { value: 'Ongoing Series' },
+          startDate: { value: '2020-01-01T00:00:00Z' },
+          imdb: { value: 'tt1234567' }
+        }
+      ]
+    }
+  };
+  
+  const series = parseSeriesResults(mockResponse);
+  
+  assert.strictEqual(series.length, 1);
+  assert.strictEqual(series[0].endYear, undefined);
+});
+
+test('parseSeriesResults - handles multiple series', () => {
+  const mockResponse = {
+    results: {
+      bindings: [
+        {
+          series: { value: 'http://www.wikidata.org/entity/Q1' },
+          seriesLabel: { value: 'Series One' },
+          startDate: { value: '2010-01-01T00:00:00Z' }
+        },
+        {
+          series: { value: 'http://www.wikidata.org/entity/Q2' },
+          seriesLabel: { value: 'Series Two' },
+          startDate: { value: '2010-06-01T00:00:00Z' }
+        }
+      ]
+    }
+  };
+  
+  const series = parseSeriesResults(mockResponse);
+  
+  assert.strictEqual(series.length, 2);
+  assert.strictEqual(series[0].label, 'Series One');
+  assert.strictEqual(series[1].label, 'Series Two');
 });

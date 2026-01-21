@@ -2,6 +2,8 @@
 
 Automated data ingestion from Wikidata to MMDB repositories.
 
+**⚠️ Note**: PR creation is currently disabled in all ingestion scripts for testing purposes. See "Enabling PR Creation" section below.
+
 ## Setup
 
 1. Install dependencies:
@@ -126,3 +128,79 @@ npm run ingest-people -- --limit=20
 - Only checks against **merged people in master branch**
 - Does NOT check pending PRs (allows multiple PRs with same people)
 - Duplicates resolved during PR merge process
+
+## Series Ingestion
+
+### Overview
+
+Series ingestion fetches TV series from Wikidata by start year.
+
+### Usage
+
+```bash
+npm run ingest-series -- --year=2010 --limit=10
+```
+
+### Parameters
+
+- `--year=YYYY` - Year series started (required)
+- `--limit=N` - Number of series to add per PR (default: 10)
+
+### How it works
+
+1. **Queries Wikidata** for TV series that started in specified year
+2. **Filters for English labels** using rdfs:label
+3. **Checks for duplicates** against existing series in master branch
+4. **Validates** each series against schema
+5. **Creates PR** with exactly `limit` unique series
+
+### Key Features
+
+- **Year-based queries**: Fetches series by start year
+- **Fast queries**: Complete in <2 seconds
+- **Comprehensive data**: Includes seasons, episodes, IMDb/TMDB IDs
+- **English labels**: Filters for entities with English names
+- **Handles ongoing series**: Properly manages series without end dates
+
+### Example
+
+```bash
+# Add 10 series from 2020
+npm run ingest-series -- --year=2020 --limit=10
+
+# Output:
+# Found 30 series from Wikidata
+# ✓ Will add Breaking Bad (s_breaking_bad)
+# ✓ Will add Game of Thrones (s_game_of_thrones)
+# ✓ Will add The Simpsons (s_simpsons)
+# ...
+# Ready to add 10 series (0 skipped)
+```
+
+### Duplicate Prevention
+
+- Only checks against **merged series in master branch**
+- Does NOT check pending PRs
+- Duplicates resolved during PR merge process
+
+---
+
+## Enabling PR Creation
+
+**Current Status**: PR creation is disabled in all scripts for testing.
+
+**To enable for production use:**
+
+1. **Movies** (`tools/src/ingest-from-wikidata.ts`):
+   - Find the TODO comment: `// TODO: Uncomment when ready for production`
+   - Uncomment the PR creation block
+
+2. **People** (`tools/src/ingest-people.ts`):
+   - Find the TODO comment: `// TODO: Uncomment when ready for production`
+   - Uncomment the PR creation block
+
+3. **Series** (`tools/src/ingest-series.ts`):
+   - Find the TODO comment: `// TODO: Uncomment when ready for production`
+   - Uncomment the PR creation block
+
+**Testing recommendation**: Test each script with `--limit=1` first to verify PR creation works correctly.

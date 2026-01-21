@@ -157,7 +157,9 @@
 **Progress**: ✅ 100% complete
 
 ### Phase 2: Local Ingestion
-**Progress**: ✅ 100% complete (awaiting live test)
+**Progress**: ✅ 99% complete
+
+**Status**: All ingestion tools implemented and tested. PR creation disabled for testing - needs to be enabled for production use.
 
 ### Phase 3: Serverless Ingestion
 **Progress**: 0% complete
@@ -189,6 +191,23 @@
   - ✅ Added `buildPersonQueryFromMovies()` function for targeted queries
   - **Performance**: Fast queries (<2 seconds), no timeouts, focused dataset
   - **Next**: Add unit tests, enable PR creation for production use
+
+- ✅ **Stage 2.6.2: Series Ingestion - COMPLETED**
+  - ✅ Added WikidataSeries interface
+  - ✅ Created buildSeriesQuery() - queries TV series by start year
+  - ✅ Created parseSeriesResults() function
+  - ✅ Created normalizeSeries() function
+  - ✅ Added getExistingSeriesIds() to GitHub client
+  - ✅ Created ingest-series.ts script
+  - ✅ Added unit tests (9 tests: 6 wikidata-client, 3 normalizer)
+  - ✅ Successfully tested: 2010 → 15 series, 2020 → 30 series
+  - **Examples**: Breaking Bad, Game of Thrones, The Simpsons
+  - **Performance**: Fast queries, uses rdfs:label filtering
+
+- 📝 **PR Creation Disabled for Testing**
+  - All three ingestion scripts have PR creation commented out
+  - Scripts validate and show what would be added
+  - Ready for production once PR creation is enabled
   - **Commits:**
     - `137deb2` - Add people ingestion with duplicate prevention
     - Rate limiting and query optimization (uncommitted)
@@ -284,18 +303,28 @@
 - [x] Error handling is robust
 - [x] Documentation for running locally
 - [x] People ingestion implemented (completed 2026-01-21)
-- [ ] Series ingestion implemented
+- [x] Series ingestion implemented (completed 2026-01-21)
 
-**Status**: 8/9 criteria met
-- [x] Documentation for running locally
+**Status**: 9/9 criteria met ✅ **PHASE 2: 99% COMPLETE**
 
-**Status**: 6/6 criteria met (pending live test) ✅
+**Note**: PR creation is currently disabled in all ingestion scripts for testing. To enable for production:
+- Uncomment PR creation code in `ingest-from-wikidata.ts`
+- Uncomment PR creation code in `ingest-people.ts`
+- Uncomment PR creation code in `ingest-series.ts`
 
 ---
 
 ## Next Steps
 
-### Immediate
+### Immediate (Before Production Use)
+1. **Enable PR creation** in ingestion scripts
+   - Uncomment PR creation code in `ingest-from-wikidata.ts`
+   - Uncomment PR creation code in `ingest-people.ts`
+   - Uncomment PR creation code in `ingest-series.ts`
+2. Test with live PR creation (1-2 PRs per script)
+3. Verify PR quality and validation
+
+### Short-term
 1. **Test ingestion tool** with live Wikidata and GitHub
 2. Verify PR creation works correctly
 3. Monitor first batch of automated PRs

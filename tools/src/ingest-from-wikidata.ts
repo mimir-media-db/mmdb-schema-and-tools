@@ -88,31 +88,35 @@ async function main() {
     return;
   }
   
-  // Create branch
-  const branchName = `ingest-${year}-${Date.now()}`;
-  console.log(`\nCreating branch: ${branchName}`);
-  await github.createBranch(repo, branchName);
+  console.log(`\nReady to add ${moviesToAdd.length} movies (${skipped} skipped)`);
+  console.log('PR creation disabled for testing');
   
-  // Add movies to PR
-  let added = 0;
-  for (const movie of moviesToAdd) {
-    await github.addMovieToPR(repo, branchName, movie);
-    added++;
-  }
-  
-  // Create PR (we know added > 0 because we checked before creating branch)
-  console.log(`\nCreating pull request...`);
-  const prNumber = await github.createPullRequest(
-    repo,
-    `Add ${added} movies from ${year}`,
-    branchName,
-    'master',
-    `Automated ingestion from Wikidata.\n\nMovies added: ${added}\nMovies skipped: ${skipped} (duplicates or validation failures)`
-  );
-  
-  console.log(`✓ Pull request created: #${prNumber}`);
-  
-  console.log(`\nIngestion complete. Added: ${added}, Skipped: ${skipped}`);
+  // TODO: Uncomment when ready for production
+  // // Create branch
+  // const branchName = `ingest-${year}-${Date.now()}`;
+  // console.log(`\nCreating branch: ${branchName}`);
+  // await github.createBranch(repo, branchName);
+  // 
+  // // Add movies to PR
+  // let added = 0;
+  // for (const movie of moviesToAdd) {
+  //   await github.addMovieToPR(repo, branchName, movie);
+  //   added++;
+  // }
+  // 
+  // // Create PR
+  // console.log(`\nCreating pull request...`);
+  // const prNumber = await github.createPullRequest(
+  //   repo,
+  //   `Add ${added} movies from ${year}`,
+  //   branchName,
+  //   'master',
+  //   `Automated ingestion from Wikidata.\n\nMovies added: ${added}\nMovies skipped: ${skipped} (duplicates or validation failures)`
+  // );
+  // 
+  // console.log(`✓ Pull request created: #${prNumber}`);
+  // 
+  // console.log(`\nIngestion complete. Added: ${added}, Skipped: ${skipped}`);
 }
 
 main().catch(error => {

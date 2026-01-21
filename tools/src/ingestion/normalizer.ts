@@ -1,5 +1,5 @@
-import { WikidataMovie, WikidataPerson } from './wikidata-client.js';
-import { generateMovieId, generatePersonId } from './id-generator.js';
+import { WikidataMovie, WikidataPerson, WikidataSeries } from './wikidata-client.js';
+import { generateMovieId, generatePersonId, generateSeriesId } from './id-generator.js';
 
 export interface MMDBMovie {
   schema_version: number;
@@ -26,6 +26,22 @@ export interface MMDBPerson {
   external_ids: {
     wikidata: string;
     imdb?: string;
+  };
+  last_updated: string;
+}
+
+export interface MMDBSeries {
+  schema_version: number;
+  id: string;
+  title: string;
+  start_year: number;
+  end_year?: number | null;
+  total_seasons?: number;
+  total_episodes?: number;
+  external_ids: {
+    wikidata: string;
+    imdb?: string;
+    tmdb?: number;
   };
   last_updated: string;
 }
@@ -94,4 +110,45 @@ export function normalizePerson(wikiPerson: WikidataPerson): MMDBPerson {
   }
   
   return person;
+}
+
+
+export function normalizeSeries(wikiSeries: WikidataSeries): MMDBSeries {
+  const today = new Date().toISOString().split('T')[0];
+  const id = generateSeriesId(wikiSeries.label);
+  
+  const series: MMDBSeries = {
+    schema_version: 1,
+    id,
+    title: wikiSeries.label,
+    start_year: wikiSeries.startYear,
+    external_ids: {
+      wikidata: wikiSeries.wikidataId
+    },
+    last_updated: today
+  };
+  
+  if (wikiSeries.endYear) {
+    series.end_year = wikiSeries.endYear;
+  } else {
+    series.end_year = null;
+  }
+  
+  if (wikiSeries.totalSeasons) {
+    series.total_seasons = wikiSeries.totalSeasons;
+  }
+  
+  if (wikiSeries.totalEpisodes) {
+    series.total_episodes = wikiSeries.totalEpisodes;
+  }
+  
+  if (wikiSeries.imdbId) {
+    series.external_ids.imdb = wikiSeries.imdbId;
+  }
+  
+  if (wikiSeries.tmdbId) {
+    series.external_ids.tmdb = wikiSeries.tmdbId;
+  }
+  
+  return series;
 }

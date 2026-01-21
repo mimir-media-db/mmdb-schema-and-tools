@@ -22,6 +22,18 @@ export interface WikidataPerson {
   wikidataId: string;
 }
 
+export interface WikidataSeries {
+  id: string;
+  label: string;
+  startYear: number;
+  endYear?: number;
+  imdbId?: string;
+  tmdbId?: number;
+  wikidataId: string;
+  totalSeasons?: number;
+  totalEpisodes?: number;
+}
+
 export function buildMovieQuery(year: number, limit: number = 100, offset: number = 0): string {
   return `
 SELECT DISTINCT ?film ?filmLabel ?year ?imdb ?tmdb ?releaseDate ?runtime
@@ -162,4 +174,52 @@ export function parsePersonResults(results: any): WikidataPerson[] {
   }
   
   return people;
+}
+
+export function buildSeriesQuery(year: number, limit: number = 100, offset: number = 0): string {
+  return `
+SELECT DISTINCT ?series ?seriesLabel ?startDate ?endDate ?imdb ?tmdb ?seasons ?episodes
+WHERE {
+  ?series wdt:P31 wd:Q5398426.       # instance of television series
+  ?series wdt:P580 ?startDate.       # start time
+  
+  BIND(YEAR(?startDate) as ?startYear)
+  FILTER(?startYear = ${year})
+  
+  OPTIONAL { ?series wdt:P582 ?endDate. }      # end time
+  OPTIONAL { ?series wdt:P345 ?imdb. }         # IMDb ID
+  OPTIONAL { ?series wdt:P4983 ?tmdb. }        # TMDB ID
+  OPTIONAL { ?series wdt:P2437 ?seasons. }     # number of seasons
+  OPTIONAL { ?series wdt:P1113 ?episodes. }    # number of episodes
+  
+  # Ensure entity has an English label
+  ?series rdfs:label ?seriesLabel .
+  FILTER(LANG(?seriesLabel) = "en")
+}
+ORDER BY ?seriesLabel
+LIMIT ${limit}
+OFFSET ${offset}
+`.trim();
+}
+
+export function parseSeriesResults(results: any): WikidataSeries[] {
+  const series: WikidataSeries[] = [];
+  
+  for (const binding of results.results.bindings) {
+    const wikidataId = binding.series.value.split('/').pop();
+    
+    series.push({
+      id: '',
+      label: binding.seriesLabel?.value || 'Unknown',
+      startYear: binding.startDate?.value ? new Date(binding.startDate.value).getFullYear() : 0,
+      endYear: binding.endDate?.value ? new Date(binding.endDate.value).getFullYear() : undefined,
+      imdbId: binding.imdb?.value,
+      tmdbId: binding.tmdb?.value ? parseInt(binding.tmdb.value) : undefined,
+      wikidataId,
+      totalSeasons: binding.seasons?.value ? parseInt(binding.seasons.value) : undefined,
+      totalEpisodes: binding.episodes?.value ? parseInt(binding.episodes.value) : undefined
+    });
+  }
+  
+  return series;
 }

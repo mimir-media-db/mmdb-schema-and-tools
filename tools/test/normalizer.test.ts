@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { normalizeMovie } from '../src/ingestion/normalizer.js';
-import { WikidataMovie } from '../src/ingestion/wikidata-client.js';
+import { normalizeMovie, normalizeSeries } from '../src/ingestion/normalizer.js';
+import { WikidataMovie, WikidataSeries } from '../src/ingestion/wikidata-client.js';
 
 test('normalizeMovie - minimal movie', () => {
   const wikiMovie: WikidataMovie = {
@@ -55,4 +55,63 @@ test('normalizeMovie - movie with special characters in title', () => {
   
   assert.strictEqual(result.id, 'm_spiderman_no_way_home_2021');
   assert.strictEqual(result.title, 'Spider-Man: No Way Home');
+});
+
+
+test('normalizeSeries - minimal series', () => {
+  const wikiSeries: WikidataSeries = {
+    id: '',
+    label: 'Breaking Bad',
+    startYear: 2008,
+    wikidataId: 'Q65'
+  };
+  
+  const result = normalizeSeries(wikiSeries);
+  
+  assert.strictEqual(result.schema_version, 1);
+  assert.strictEqual(result.id, 's_breaking_bad');
+  assert.strictEqual(result.title, 'Breaking Bad');
+  assert.strictEqual(result.start_year, 2008);
+  assert.strictEqual(result.end_year, null);
+  assert.strictEqual(result.external_ids.wikidata, 'Q65');
+  assert.ok(result.last_updated);
+});
+
+test('normalizeSeries - full series with all fields', () => {
+  const wikiSeries: WikidataSeries = {
+    id: '',
+    label: 'Game of Thrones',
+    startYear: 2011,
+    endYear: 2019,
+    wikidataId: 'Q23572',
+    imdbId: 'tt0944947',
+    tmdbId: 1399,
+    totalSeasons: 8,
+    totalEpisodes: 73
+  };
+  
+  const result = normalizeSeries(wikiSeries);
+  
+  assert.strictEqual(result.id, 's_game_of_thrones');
+  assert.strictEqual(result.start_year, 2011);
+  assert.strictEqual(result.end_year, 2019);
+  assert.strictEqual(result.total_seasons, 8);
+  assert.strictEqual(result.total_episodes, 73);
+  assert.strictEqual(result.external_ids.imdb, 'tt0944947');
+  assert.strictEqual(result.external_ids.tmdb, 1399);
+});
+
+test('normalizeSeries - ongoing series (no end year)', () => {
+  const wikiSeries: WikidataSeries = {
+    id: '',
+    label: 'The Simpsons',
+    startYear: 1989,
+    wikidataId: 'Q886'
+  };
+  
+  const result = normalizeSeries(wikiSeries);
+  
+  assert.strictEqual(result.id, 's_simpsons');
+  assert.strictEqual(result.start_year, 1989);
+  assert.strictEqual(result.end_year, null);
 });
