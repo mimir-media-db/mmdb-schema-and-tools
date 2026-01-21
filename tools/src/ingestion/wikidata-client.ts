@@ -45,6 +45,10 @@ OFFSET ${offset}
 
 export async function queryWikidata(sparql: string): Promise<any> {
   const url = 'https://query.wikidata.org/sparql';
+  
+  // Add delay to respect rate limits
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  
   const response = await fetch(url, {
     method: 'POST',
     headers: {
@@ -83,30 +87,61 @@ export function parseMovieResults(results: any): WikidataMovie[] {
   return movies;
 }
 
-export function buildPersonQuery(limit: number = 100, offset: number = 0): string {
+export function buildPersonQuery(limit: number = 100, offset: number = 0, birthYear?: number): string {
+  const birthYearFilter = birthYear 
+    ? `FILTER(YEAR(?birthDate) = ${birthYear})`
+    : '';
+    
   return `
 SELECT DISTINCT ?person ?personLabel ?birthDate ?deathDate ?imdb
 WHERE {
   ?person wdt:P31 wd:Q5.              # instance of human
-  {
-    ?person wdt:P106 wd:Q33999.       # occupation: actor
-  } UNION {
-    ?person wdt:P106 wd:Q2526255.     # occupation: film director
-  } UNION {
-    ?person wdt:P106 wd:Q28389.       # occupation: screenwriter
-  }
+  ?person wdt:P106 wd:Q33999.         # occupation: actor
+  ?person wdt:P345 ?imdb.             # Must have IMDb ID
+  ?person wdt:P569 ?birthDate.        # Must have birth date
   
-  OPTIONAL { ?person wdt:P569 ?birthDate. }  # date of birth
+  ${birthYearFilter}
+  
   OPTIONAL { ?person wdt:P570 ?deathDate. }  # date of death
-  OPTIONAL { ?person wdt:P345 ?imdb. }       # IMDb ID
   
-  FILTER(BOUND(?imdb))                       # Must have IMDb ID
-  
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+  # Ensure entity has an English label
+  ?person rdfs:label ?personLabel .
+  FILTER(LANG(?personLabel) = "en")
 }
 ORDER BY ?personLabel
 LIMIT ${limit}
 OFFSET ${offset}
+`.trim();
+}
+
+export function buildPersonQueryFromMovies(movieWikidataIds: string[], limit: number = 100): string {
+  const movieValues = movieWikidataIds.map(id => `wd:${id}`).join(' ');
+  
+  return `
+SELECT DISTINCT ?person ?personLabel ?birthDate ?deathDate ?imdb
+WHERE {
+  VALUES ?movie { ${movieValues} }
+  
+  {
+    ?movie wdt:P161 ?person.          # cast member
+  } UNION {
+    ?movie wdt:P57 ?person.           # director
+  } UNION {
+    ?movie wdt:P162 ?person.          # producer
+  }
+  
+  ?person wdt:P31 wd:Q5.              # instance of human
+  ?person wdt:P345 ?imdb.             # Must have IMDb ID
+  
+  OPTIONAL { ?person wdt:P569 ?birthDate. }  # birth date
+  OPTIONAL { ?person wdt:P570 ?deathDate. }  # death date
+  
+  # Ensure entity has an English label
+  ?person rdfs:label ?personLabel .
+  FILTER(LANG(?personLabel) = "en")
+}
+ORDER BY ?personLabel
+LIMIT ${limit}
 `.trim();
 }
 

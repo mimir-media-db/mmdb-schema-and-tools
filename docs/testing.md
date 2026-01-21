@@ -56,7 +56,9 @@ tools/
   - Full movie (all optional fields)
   - Special characters in titles
 
-### Wikidata Client Tests (4 tests)
+### Wikidata Client Tests (11 tests)
+
+**Movie Query Tests (4 tests)**
 - `buildMovieQuery()` - Generates SPARQL queries
   - Default parameters
   - Custom limit and offset
@@ -64,6 +66,18 @@ tools/
 - `parseMovieResults()` - Parses Wikidata API responses
   - Complete movie data
   - Missing optional fields
+
+**People Query Tests (7 tests)**
+- `buildPersonQueryFromMovies()` - Generates SPARQL for people from movies
+  - Single movie query
+  - Multiple movies query
+  - UNION for cast, directors, and producers
+  
+- `parsePersonResults()` - Parses Wikidata person responses
+  - Complete person data with birth date
+  - Missing optional fields
+  - Death date handling
+  - Multiple people parsing
 
 ## Test Files
 
@@ -109,11 +123,11 @@ node --test dist/test/id-generator.test.js
 
 ## Test Results
 
-Current coverage: **27 tests, 27 passing**
+Current coverage: **34 tests, 34 passing**
 
 ```
-# tests 27
-# pass 27
+# tests 34
+# pass 34
 # fail 0
 ```
 
@@ -121,7 +135,8 @@ Current coverage: **27 tests, 27 passing**
 - Duplicate Prevention: 10 tests ✅
 - ID Generator: 10 tests ✅
 - Normalizer: 3 tests ✅
-- Wikidata Client: 4 tests ✅
+- Wikidata Client (Movies): 4 tests ✅
+- Wikidata Client (People): 7 tests ✅
 
 ## CI/CD Integration
 

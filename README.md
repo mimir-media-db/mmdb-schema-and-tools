@@ -185,9 +185,10 @@ npx mmdb-build-indexes
 - ✅ Schema definitions (v1)
 - ✅ Core tooling (validation, indexing, scaffolding)
 - ✅ CI/CD workflows
-- 🚧 Initial data repositories
-- ⏳ Manual data seeding
-- ⏳ Local ingestion script
+- ✅ Initial data repositories
+- ✅ Local ingestion script (movies)
+- ✅ People ingestion (cast, directors, producers)
+- ⏳ Series ingestion
 - ⏳ Serverless ingestion pipeline
 - ⏳ Community contributions
 

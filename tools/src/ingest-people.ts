@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { buildPersonQuery, queryWikidata, parsePersonResults } from './ingestion/wikidata-client.js';
+import { buildPersonQueryFromMovies, queryWikidata, parsePersonResults } from './ingestion/wikidata-client.js';
 import { normalizePerson } from './ingestion/normalizer.js';
 import { GitHubClient } from './ingestion/github-client.js';
 import { loadSchema } from './shared-config.js';
@@ -25,20 +25,43 @@ async function main() {
   const existingIds = await github.getExistingPeopleIds(repo);
   console.log(`Found ${existingIds.size} existing people\n`);
   
-  // Get people from pending PRs
-  console.log('Checking for people in pending PRs...');
-  const pendingIds = await github.getPeopleInPendingPRs(repo);
-  console.log(`Found ${pendingIds.size} people in pending PRs\n`);
+  // Get all movie Wikidata IDs
+  console.log('Fetching movie Wikidata IDs from repos...');
+  const movieWikidataIds = await github.getAllMovieWikidataIds();
+  console.log(`Found ${movieWikidataIds.length} movies with Wikidata IDs\n`);
   
-  // Query Wikidata - fetch 3x to account for duplicates
-  console.log('Querying Wikidata...');
-  const sparql = buildPersonQuery(limit * 3, 0);
-  const results = await queryWikidata(sparql);
-  const people = parsePersonResults(results);
+  if (movieWikidataIds.length === 0) {
+    console.log('No movies found with Wikidata IDs');
+    return;
+  }
   
-  console.log(`Found ${people.length} people from Wikidata\n`);
+  // Query Wikidata for cast members - process in batches to avoid query size limits
+  const batchSize = 50;
+  const allPeople: any[] = [];
   
-  if (people.length === 0) {
+  for (let i = 0; i < movieWikidataIds.length; i += batchSize) {
+    const batch = movieWikidataIds.slice(i, i + batchSize);
+    console.log(`Querying Wikidata for cast members (batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(movieWikidataIds.length/batchSize)})...`);
+    
+    const sparql = buildPersonQueryFromMovies(batch, limit * 3);
+    const results = await queryWikidata(sparql);
+    const people = parsePersonResults(results);
+    
+    allPeople.push(...people);
+    console.log(`Found ${people.length} people in this batch`);
+    
+    // Stop if we have enough
+    if (allPeople.length >= limit * 3) {
+      break;
+    }
+    
+    // Rate limiting
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  
+  console.log(`\nTotal people found: ${allPeople.length}\n`);
+  
+  if (allPeople.length === 0) {
     console.log('No people to process');
     return;
   }
@@ -47,7 +70,7 @@ async function main() {
   const peopleToAdd: any[] = [];
   let skipped = 0;
   
-  for (const wikiPerson of people) {
+  for (const wikiPerson of allPeople) {
     // Stop if we have enough
     if (peopleToAdd.length >= limit) {
       break;
@@ -57,14 +80,6 @@ async function main() {
     
     // Check for duplicates in master
     if (existingIds.has(person.id)) {
-      console.log(`⊘ Skipping ${person.name}: already exists in master (${person.id})`);
-      skipped++;
-      continue;
-    }
-    
-    // Check for duplicates in pending PRs
-    if (pendingIds.has(person.id)) {
-      console.log(`⊘ Skipping ${person.name}: already in pending PR (${person.id})`);
       skipped++;
       continue;
     }
@@ -87,31 +102,35 @@ async function main() {
     return;
   }
   
-  // Create branch
-  const branchName = `ingest-people-${Date.now()}`;
-  console.log(`\nCreating branch: ${branchName}`);
-  await github.createBranch(repo, branchName);
+  console.log(`\nReady to add ${peopleToAdd.length} people (${skipped} skipped)`);
+  console.log('PR creation disabled for testing');
   
-  // Add people to PR
-  let added = 0;
-  for (const person of peopleToAdd) {
-    await github.addPersonToPR(repo, branchName, person);
-    added++;
-  }
-  
-  // Create PR
-  console.log(`\nCreating pull request...`);
-  const prNumber = await github.createPullRequest(
-    repo,
-    `Add ${added} people`,
-    branchName,
-    'master',
-    `Automated ingestion from Wikidata.\n\nPeople added: ${added}\nPeople skipped: ${skipped} (duplicates or validation failures)`
-  );
-  
-  console.log(`✓ Pull request created: #${prNumber}`);
-  
-  console.log(`\nIngestion complete. Added: ${added}, Skipped: ${skipped}`);
+  // TODO: Uncomment when ready for production
+  // // Create branch
+  // const branchName = `ingest-people-${Date.now()}`;
+  // console.log(`\nCreating branch: ${branchName}`);
+  // await github.createBranch(repo, branchName);
+  // 
+  // // Add people to PR
+  // let added = 0;
+  // for (const person of peopleToAdd) {
+  //   await github.addPersonToPR(repo, branchName, person);
+  //   added++;
+  // }
+  // 
+  // // Create PR
+  // console.log(`\nCreating pull request...`);
+  // const prNumber = await github.createPullRequest(
+  //   repo,
+  //   `Add ${added} people`,
+  //   branchName,
+  //   'master',
+  //   `Automated ingestion from Wikidata.\n\nPeople added: ${added}\nPeople skipped: ${skipped} (duplicates or validation failures)`
+  // );
+  // 
+  // console.log(`✓ Pull request created: #${prNumber}`);
+  // 
+  // console.log(`\nIngestion complete. Added: ${added}, Skipped: ${skipped}`);
 }
 
 main().catch(error => {

@@ -67,3 +67,62 @@ npm run ingest -- --year=2010 --limit=10
 ```
 
 Each run creates a separate PR with unique movies. No manual state management required!
+
+## People Ingestion
+
+### Overview
+
+People ingestion fetches cast members, directors, and producers from movies already in MMDB repositories.
+
+### Usage
+
+```bash
+npm run ingest-people -- --limit=10
+```
+
+### Parameters
+
+- `--limit=N` - Number of people to add per PR (default: 10)
+
+### How it works
+
+1. **Fetches movie Wikidata IDs** from all year-based repos (mmdb-2010, mmdb-2011, etc.)
+2. **Queries Wikidata** for people associated with those movies:
+   - Cast members (P161)
+   - Directors (P57)
+   - Producers (P162)
+3. **Processes in batches** of 50 movies to avoid query size limits
+4. **Checks for duplicates** against existing people in master branch
+5. **Validates** each person against schema
+6. **Creates PR** with exactly `limit` unique people
+
+### Key Features
+
+- **Movie-based approach**: Only fetches people related to existing movies
+- **No timeouts**: Focused queries complete in <2 seconds
+- **Comprehensive**: Includes actors, directors, and producers
+- **English labels**: Filters for entities with English names
+- **Rate limiting**: 1-second delay between batch queries
+
+### Example
+
+```bash
+# Add 20 people from existing movies
+npm run ingest-people -- --limit=20
+
+# Output:
+# Found 8 movies with Wikidata IDs
+# Querying Wikidata for cast members (batch 1/1)...
+# Found 138 people in this batch
+# ✓ Will add M. Night Shyamalan (p_m_night_shyamalan)
+# ✓ Will add David Fincher (p_david_fincher)
+# ✓ Will add Andrew Garfield (p_andrew_garfield)
+# ...
+# Ready to add 20 people (0 skipped)
+```
+
+### Duplicate Prevention
+
+- Only checks against **merged people in master branch**
+- Does NOT check pending PRs (allows multiple PRs with same people)
+- Duplicates resolved during PR merge process

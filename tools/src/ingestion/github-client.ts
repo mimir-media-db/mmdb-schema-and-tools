@@ -50,6 +50,52 @@ export class GitHubClient {
     return new Set();
   }
   
+  async getAllMovieWikidataIds(): Promise<string[]> {
+    const wikidataIds: string[] = [];
+    
+    // Get all year-based repos
+    const { data: repos } = await this.octokit.repos.listForOrg({
+      org: this.owner,
+      per_page: 100
+    });
+    
+    const yearRepos = repos.filter(r => /^mmdb-\d{4}$/.test(r.name));
+    
+    for (const repo of yearRepos) {
+      try {
+        const { data: files } = await this.octokit.repos.getContent({
+          owner: this.owner,
+          repo: repo.name,
+          path: 'data/movies'
+        });
+        
+        if (Array.isArray(files)) {
+          for (const file of files) {
+            if (file.name.endsWith('.json') && file.name !== 'index.json') {
+              const { data: fileData } = await this.octokit.repos.getContent({
+                owner: this.owner,
+                repo: repo.name,
+                path: file.path
+              });
+              
+              if ('content' in fileData) {
+                const content = Buffer.from(fileData.content, 'base64').toString('utf-8');
+                const movie = JSON.parse(content);
+                if (movie.external_ids?.wikidata) {
+                  wikidataIds.push(movie.external_ids.wikidata);
+                }
+              }
+            }
+          }
+        }
+      } catch (error: any) {
+        console.log(`Skipping ${repo.name}: ${error.message}`);
+      }
+    }
+    
+    return wikidataIds;
+  }
+  
   async getMoviesInPendingPRs(repo: string): Promise<Set<string>> {
     const movieIds = new Set<string>();
     
