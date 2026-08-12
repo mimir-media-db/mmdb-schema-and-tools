@@ -9,6 +9,7 @@ build/
 *.swp
 *.swo
 .amazon-q-history/
+.envrc
 .ingestion-state.json
 tools/**/*.js
 tools/**/*.d.ts
