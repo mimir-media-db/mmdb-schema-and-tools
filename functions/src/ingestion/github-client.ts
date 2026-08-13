@@ -344,6 +344,33 @@ export class GitHubClient {
     return data.number;
   }
 
+  async enableAutoMerge(repo: string, pullNumber: number): Promise<void> {
+    // First get the PR node ID (needed for GraphQL)
+    const { data: pr } = await this.octokit.pulls.get({
+      owner: this.owner,
+      repo,
+      pull_number: pullNumber,
+    });
+
+    // Enable auto-merge via GraphQL
+    await this.octokit.graphql(`
+      mutation EnableAutoMerge($pullRequestId: ID!) {
+        enablePullRequestAutoMerge(input: {
+          pullRequestId: $pullRequestId
+          mergeMethod: SQUASH
+        }) {
+          pullRequest {
+            autoMergeRequest {
+              enabledAt
+            }
+          }
+        }
+      }
+    `, {
+      pullRequestId: pr.node_id,
+    });
+  }
+
   async addMovieToPR(repo: string, branch: string, movie: MMDBMovie): Promise<void> {
     const path = getMovieFilePath(movie);
     const content = serializeEntity(movie);

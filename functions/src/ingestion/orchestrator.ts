@@ -500,6 +500,14 @@ async function runPeoplePass(
       );
       result.prsCreated.push(`${PEOPLE_REPO}#${prNumber}`);
       logger.info('People PR created', { repo: PEOPLE_REPO, pr: prNumber, count: result.peopleIngested });
+
+      // Enable auto-merge (squash) — non-blocking
+      try {
+        await github.enableAutoMerge(PEOPLE_REPO, prNumber);
+        logger.info('Auto-merge enabled', { repo: PEOPLE_REPO, pr: prNumber });
+      } catch (error: any) {
+        logger.warn('Could not enable auto-merge (check repo settings)', { repo: PEOPLE_REPO, pr: prNumber, error: error.message });
+      }
     }
   } catch (error: any) {
     result.errors.push(`People pass error: ${error.message}`);
@@ -575,6 +583,14 @@ async function createTitlePRs(
         );
         result.prsCreated.push(`${yearRepo}#${prNumber}`);
         logger.info('Title PR created', { repo: yearRepo, pr: prNumber, movies: movies.length, series: series.length });
+
+        // Enable auto-merge (squash) — non-blocking
+        try {
+          await github.enableAutoMerge(yearRepo, prNumber);
+          logger.info('Auto-merge enabled', { repo: yearRepo, pr: prNumber });
+        } catch (error: any) {
+          logger.warn('Could not enable auto-merge (check repo settings)', { repo: yearRepo, pr: prNumber, error: error.message });
+        }
       }
     } catch (error: any) {
       result.errors.push(`PR creation error for ${yearRepo}: ${error.message}`);
