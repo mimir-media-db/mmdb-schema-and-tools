@@ -345,15 +345,19 @@ async function updateMetaRepos(octokit: Octokit, repoName: string, year: number)
     // File doesn't exist yet — we'll create it
   }
 
-  metaFile.repositories.push({
-    name: repoName,
-    type: 'data',
-    url: `https://github.com/${GITHUB_ORG}/${repoName}`,
-    description: `Movies and series from ${year}`,
-    entity_count: 0,
-    year,
-    visibility: 'public',
-  });
+  // Deduplicate: don't add if already registered
+  const alreadyExists = metaFile.repositories.some(r => r.name === repoName);
+  if (!alreadyExists) {
+    metaFile.repositories.push({
+      name: repoName,
+      type: 'data',
+      url: `https://github.com/${GITHUB_ORG}/${repoName}`,
+      description: `Movies and series from ${year}`,
+      entity_count: 0,
+      year,
+      visibility: 'public',
+    });
+  }
 
   metaFile.last_updated = new Date().toISOString().split('T')[0];
 
