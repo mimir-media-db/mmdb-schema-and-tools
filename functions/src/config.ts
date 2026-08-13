@@ -46,3 +46,9 @@ export const MAX_EMPTY_RUNS = 3;
 
 /** Maximum results from a single Wikidata query before we consider it garbage */
 export const MAX_RESULTS_SANITY = 2000;
+
+/** Maximum repos to create per ingestion run */
+export const MAX_REPOS_PER_RUN = 1;
+
+/** Minimum year for repo creation (first motion picture) */
+export const MIN_YEAR = 1888;

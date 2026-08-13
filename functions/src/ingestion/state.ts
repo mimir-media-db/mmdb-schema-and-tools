@@ -28,6 +28,9 @@ export interface IngestionState {
     run_id: string | null;
   };
   consecutive_empty_runs: number;
+  repos_created_this_run?: number;
+  last_repo_created?: string | null;
+  last_repo_created_at?: string | null;
 }
 
 const DEFAULT_STATE: IngestionState = {
@@ -46,6 +49,9 @@ const DEFAULT_STATE: IngestionState = {
     run_id: null,
   },
   consecutive_empty_runs: 0,
+  repos_created_this_run: 0,
+  last_repo_created: null,
+  last_repo_created_at: null,
 };
 
 let octokit: Octokit | null = null;

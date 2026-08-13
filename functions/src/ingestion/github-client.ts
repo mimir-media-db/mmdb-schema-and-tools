@@ -19,6 +19,10 @@ export class GitHubClient {
     this.owner = owner;
   }
 
+  getOctokit(): Octokit {
+    return this.octokit;
+  }
+
   async repoExists(repo: string): Promise<boolean> {
     try {
       await this.octokit.repos.get({ owner: this.owner, repo });

@@ -31,8 +31,10 @@ import {
   MAX_PEOPLE_PER_QUERY,
   MAX_EMPTY_RUNS,
   MAX_RESULTS_SANITY,
+  MAX_REPOS_PER_RUN,
 } from '../config.js';
 import { shouldAutoPause, isResultCountSane } from './safeguards.js';
+import { createYearRepo } from './repo-creator.js';
 
 export interface IngestionResult {
   moviesIngested: number;
@@ -84,6 +86,9 @@ export async function runIngestion(githubToken: string, dryRun: boolean = false)
     const runDate = new Date().toISOString().split('T')[0];
     const branchSuffix = runDate.replace(/-/g, '');
 
+    // Reset per-run repo creation counter
+    await updateState({ repos_created_this_run: 0 });
+
     logger.info('Starting ingestion run', {
       state,
       dryRun,
@@ -91,7 +96,7 @@ export async function runIngestion(githubToken: string, dryRun: boolean = false)
     });
 
     // ─── Pass 1: Backlog ─────────────────────────────────────────────────────
-    const backlogTitles = await runBacklogPass(github, state.backlog_current_year, state.backlog_offset, result);
+    const backlogTitles = await runBacklogPass(github, state.backlog_current_year, state.backlog_offset, result, dryRun);
 
     // ─── Pass 2: Recent ──────────────────────────────────────────────────────
     const recentTitles = await runRecentPass(github, state.last_recent_timestamp, result);
@@ -158,7 +163,8 @@ async function runBacklogPass(
   github: GitHubClient,
   currentYear: number,
   offset: number,
-  result: IngestionResult
+  result: IngestionResult,
+  dryRun: boolean = false
 ): Promise<TitleBatch> {
   const batch: TitleBatch = {
     movies: new Map(),
@@ -199,9 +205,28 @@ async function runBacklogPass(
     const repoAvailable = await github.repoExists(yearRepo);
 
     if (!repoAvailable) {
-      logger.warn(`Repo ${yearRepo} does not exist, skipping titles for year ${currentYear}`);
-      await advanceBacklog(0, true, currentYear);
-      return batch;
+      // Check creation cap (max per run)
+      const currentState = await getState();
+      if ((currentState.repos_created_this_run || 0) >= MAX_REPOS_PER_RUN) {
+        logger.info(`Repo ${yearRepo} missing but creation cap reached, skipping`);
+        await advanceBacklog(0, true, currentYear);
+        return batch;
+      }
+
+      const creationResult = await createYearRepo(github.getOctokit(), currentYear, dryRun);
+      if (!creationResult.created) {
+        logger.warn(`Could not create ${yearRepo}: ${creationResult.reason}`);
+        await advanceBacklog(0, true, currentYear);
+        return batch;
+      }
+
+      await updateState({
+        repos_created_this_run: (currentState.repos_created_this_run || 0) + 1,
+        last_repo_created: yearRepo,
+        last_repo_created_at: new Date().toISOString(),
+      });
+
+      logger.info(`Created new repo: ${yearRepo}, continuing ingestion`);
     }
 
     // Get existing IDs for deduplication
