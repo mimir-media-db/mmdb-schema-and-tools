@@ -27,7 +27,8 @@ cat mmdb-2026/data/movies/index.json | jq '.[0:3]'
 
 ## Project Status
 
-✅ **Phase 3: Automated Ingestion** (Active)
+✅ **Phase 1: Foundation** (Complete)
+✅ **Phase 2: Automated Ingestion** (Active)
 
 | Component | Status |
 |-----------|--------|
@@ -38,11 +39,21 @@ cat mmdb-2026/data/movies/index.json | jq '.[0:3]'
 | Series ingestion from Wikidata | ✅ Running |
 | People ingestion (cast, directors, producers) | ✅ Running |
 | Serverless pipeline (Firebase Cloud Functions) | ✅ Deployed |
-| Bidirectional backlog (forward + backward) | ✅ Running |
-| Nightly current-year ingestion | ✅ Running |
 | Auto-merge bot PRs (squash) | ✅ Active |
 | Automated year repo creation | ✅ Active |
-| Safeguards (kill switch, lock, anomaly detection) | ✅ Active |
+
+## Roadmap
+
+- ✅ Schema definitions (v1)
+- ✅ Core tooling (validation, indexing, scaffolding)
+- ✅ CI/CD workflows
+- ✅ Initial data repositories
+- ✅ Local ingestion script (movies)
+- ✅ People ingestion (cast, directors, producers)
+- ✅ Series ingestion from Wikidata
+- ✅ Serverless ingestion pipeline (Firebase Cloud Functions, 3x daily)
+- ⏳ Additional year repos (2011-2025)
+- ⏳ Community contribution workflow
 
 ## Repository Structure
 
@@ -62,11 +73,11 @@ mmdb-schema-and-tools/          # This repo
 │       ├── ingest-from-wikidata.ts
 │       ├── ingest-people.ts
 │       └── ingest-series.ts
-├── functions/                  # Firebase Cloud Functions (ingestion pipeline)
+├── functions/                  # Firebase Cloud Functions (automated ingestion)
 │   ├── src/
-│   │   ├── index.ts           # Scheduled + HTTP trigger functions
-│   │   └── ingestion/         # Orchestrator, Wikidata client, GitHub client
-│   ├── test/                  # 143 unit tests
+│   │   ├── index.ts           # Cloud Function entry points
+│   │   └── ingestion/         # Wikidata SPARQL ingestion logic
+│   ├── test/                  # Unit tests
 │   └── scripts/               # Manual trigger + setup scripts
 └── docs/                       # Documentation
 ```
@@ -93,7 +104,7 @@ The pipeline runs as Firebase Cloud Functions:
 - **Source** — [Wikidata](https://www.wikidata.org/) SPARQL queries
 - **Output** — Pull requests with auto-merge (squash)
 
-Safeguards: kill switch, concurrency lock, anomaly detection, title count sanity checks, 1 repo creation per run cap.
+Safeguards: kill switch, concurrency lock, anomaly detection, title count sanity checks.
 
 ## Usage
 
@@ -131,6 +142,12 @@ See [functions/README.md](functions/README.md) for full deployment docs.
 - **CI/CD**: GitHub Actions
 - **Distribution**: Git repositories (GitHub)
 - **Cost**: $0 (Firebase free tier)
+
+## Cost & Sustainability
+
+- **Phase 1-2**: $0 (GitHub Actions free tier, local tooling)
+- **Phase 2 (current)**: $0 (Firebase Blaze free tier — 2M invocations/month)
+- **Target**: ≤10 MXN/month operational cost
 
 ## Design Principles
 
