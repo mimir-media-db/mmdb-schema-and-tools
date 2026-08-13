@@ -65,7 +65,6 @@ const DEFAULT_STATE: IngestionState = {
 };
 
 let octokit: Octokit | null = null;
-let fileSha: string | undefined;
 
 function getOctokit(): Octokit {
   if (!octokit) {
@@ -95,7 +94,6 @@ export async function getState(): Promise<IngestionState> {
     });
 
     if ('content' in data) {
-      fileSha = data.sha;
       const content = Buffer.from(data.content, 'base64').toString('utf-8');
       const raw = JSON.parse(content) as Partial<IngestionState>;
       return mergeWithDefaults(raw);
@@ -116,25 +114,56 @@ async function saveState(state: IngestionState): Promise<void> {
   const gh = getOctokit();
   const content = Buffer.from(JSON.stringify(state, null, 2) + '\n').toString('base64');
 
+  // Always fetch fresh sha to avoid stale sha errors
+  let currentSha: string | undefined;
   try {
-    const { data } = await gh.repos.createOrUpdateFileContents({
+    const { data } = await gh.repos.getContent({
+      owner: GITHUB_ORG,
+      repo: META_REPO,
+      path: STATE_PATH,
+      ref: 'master',
+    });
+    if ('sha' in data) {
+      currentSha = data.sha;
+    }
+  } catch (error: any) {
+    if (error.status !== 404) throw error;
+    // File doesn't exist yet, no sha needed
+  }
+
+  try {
+    await gh.repos.createOrUpdateFileContents({
       owner: GITHUB_ORG,
       repo: META_REPO,
       path: STATE_PATH,
       message: `chore: update ingestion state`,
       content,
       branch: 'master',
-      ...(fileSha && { sha: fileSha }),
+      ...(currentSha && { sha: currentSha }),
     });
 
-    fileSha = data.content?.sha;
+    // sha cached implicitly by always fetching fresh
   } catch (error: any) {
-    // If sha mismatch (concurrent update), re-fetch and retry
-    if (error.status === 409) {
-      logger.warn('State file conflict, re-fetching');
-      const freshState = await getState();
-      fileSha = undefined;
-      await saveState({ ...freshState, ...state });
+    // If sha mismatch (race condition), re-fetch and retry once
+    if (error.status === 409 || error.status === 422) {
+      logger.warn('State file conflict, retrying with fresh sha');
+      const { data: freshFile } = await gh.repos.getContent({
+        owner: GITHUB_ORG,
+        repo: META_REPO,
+        path: STATE_PATH,
+        ref: 'master',
+      });
+      const freshSha = 'sha' in freshFile ? freshFile.sha : undefined;
+
+      await gh.repos.createOrUpdateFileContents({
+        owner: GITHUB_ORG,
+        repo: META_REPO,
+        path: STATE_PATH,
+        message: `chore: update ingestion state`,
+        content,
+        branch: 'master',
+        ...(freshSha && { sha: freshSha }),
+      });
       return;
     }
     throw error;
