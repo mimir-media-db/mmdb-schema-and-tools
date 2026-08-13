@@ -1,5 +1,8 @@
 import { readFileSync } from 'fs';
+import http from 'http';
 import https from 'https';
+
+const isDry = process.argv.includes('--dry');
 
 const env = Object.fromEntries(
   readFileSync('.env', 'utf8')
@@ -8,11 +11,16 @@ const env = Object.fromEntries(
     .map(l => l.split('='))
 );
 
-console.log('Triggering ingestion (dry run)...');
+const dryParam = isDry ? '&dryRun=true' : '';
+const url = `${env.FUNCTION_URL}?mode=currentYear${dryParam}`;
+
+console.log(`Triggering current-year ingestion${isDry ? ' (dry run)' : ''}...`);
+console.log(`URL: ${url}`);
 console.log('Waiting up to 10 minutes for response...\n');
 
+// Use raw https.request for full timeout control
 const result = await new Promise((resolve, reject) => {
-  const urlObj = new URL(`${env.FUNCTION_URL}?dryRun=true`);
+  const urlObj = new URL(url);
   const req = https.request({
     hostname: urlObj.hostname,
     path: urlObj.pathname + urlObj.search,

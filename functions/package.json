@@ -15,7 +15,10 @@
     "ingest:local:live": "yarn build && node --env-file=.env dist/local-runner.js --live",
     "ingest:dry": "node scripts/ingest-dry.mjs",
     "ingest:now": "node scripts/ingest-now.mjs",
+    "ingest:current-year:dry": "node scripts/ingest-current-year.mjs --dry",
+    "ingest:current-year:now": "node scripts/ingest-current-year.mjs",
     "logs": "firebase functions:log",
+    "setup:repos": "node scripts/setup-repos.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-vm-modules --env-file=.env.test --test dist/test/**/*.test.js",
     "test:build": "tsc -p tsconfig.test.json && yarn test"

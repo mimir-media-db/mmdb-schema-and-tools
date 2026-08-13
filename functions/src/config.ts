@@ -50,5 +50,14 @@ export const MAX_RESULTS_SANITY = 2000;
 /** Maximum repos to create per ingestion run */
 export const MAX_REPOS_PER_RUN = 1;
 
+/** Current year ingestion: movies per run */
+export const CURRENT_YEAR_MOVIES_LIMIT = 100;
+
+/** Current year ingestion: series per run */
+export const CURRENT_YEAR_SERIES_LIMIT = 50;
+
+/** Nightly schedule for current year */
+export const CURRENT_YEAR_SCHEDULE = 'every day 02:00';
+
 /** Minimum year for repo creation (first motion picture) */
 export const MIN_YEAR = 1888;

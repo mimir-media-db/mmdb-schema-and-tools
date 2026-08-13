@@ -24,6 +24,9 @@ const DEFAULT_STATE: IngestionState = {
     run_id: null,
   },
   consecutive_empty_runs: 0,
+  current_year_offset_movies: 0,
+  current_year_offset_series: 0,
+  current_year: new Date().getFullYear(),
 };
 
 describe('Merge With Defaults', () => {
@@ -116,6 +119,9 @@ describe('Merge With Defaults', () => {
           run_id: 'abc-123',
         },
         consecutive_empty_runs: 1,
+        current_year_offset_movies: 200,
+        current_year_offset_series: 100,
+        current_year: 2026,
       };
 
       const result = mergeStateWithDefaults(completeState, DEFAULT_STATE);

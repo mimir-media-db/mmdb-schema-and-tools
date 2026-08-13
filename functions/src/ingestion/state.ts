@@ -31,6 +31,9 @@ export interface IngestionState {
   repos_created_this_run?: number;
   last_repo_created?: string | null;
   last_repo_created_at?: string | null;
+  current_year_offset_movies: number;
+  current_year_offset_series: number;
+  current_year: number;
 }
 
 const DEFAULT_STATE: IngestionState = {
@@ -52,6 +55,9 @@ const DEFAULT_STATE: IngestionState = {
   repos_created_this_run: 0,
   last_repo_created: null,
   last_repo_created_at: null,
+  current_year_offset_movies: 0,
+  current_year_offset_series: 0,
+  current_year: new Date().getFullYear(),
 };
 
 let octokit: Octokit | null = null;

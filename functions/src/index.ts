@@ -10,8 +10,9 @@ import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { onRequest } from 'firebase-functions/v2/https';
 import { logger } from 'firebase-functions/v2';
 import { runIngestion } from './ingestion/orchestrator.js';
+import { runCurrentYearIngestion } from './ingestion/current-year.js';
 import { isIngestionPaused } from './ingestion/safeguards.js';
-import { SCHEDULE_CRON, SCHEDULE_TIMEZONE } from './config.js';
+import { SCHEDULE_CRON, SCHEDULE_TIMEZONE, CURRENT_YEAR_SCHEDULE } from './config.js';
 
 // Environment-based dry run flag
 const DRY_RUN = process.env.MMDB_DRY_RUN === 'true';
@@ -122,9 +123,10 @@ export const mmdbIngestManual = onRequest(
     }
 
     const dryRun = req.query.dryRun === 'true' || DRY_RUN;
+    const mode = req.query.mode as string | undefined;
     const startTime = Date.now();
 
-    logger.info('MMDB manual ingestion triggered', { dryRun });
+    logger.info('MMDB manual ingestion triggered', { dryRun, mode: mode || 'backlog' });
 
     try {
       const token = process.env.GITHUB_TOKEN;
@@ -134,7 +136,9 @@ export const mmdbIngestManual = onRequest(
         return;
       }
 
-      const result = await runIngestion(token, dryRun);
+      const result = mode === 'currentYear'
+        ? await runCurrentYearIngestion(token, dryRun)
+        : await runIngestion(token, dryRun);
 
       const durationMs = Date.now() - startTime;
 
@@ -159,6 +163,70 @@ export const mmdbIngestManual = onRequest(
         durationSeconds: Math.round(durationMs / 1000),
         error: error.message,
       });
+    }
+  }
+);
+
+/**
+ * Scheduled current-year ingestion function.
+ *
+ * Runs nightly at 2 AM to ingest movies/series released in the current year.
+ * Shares the concurrency lock with mmdbIngest — only one can run at a time.
+ */
+export const mmdbIngestCurrentYear = onSchedule(
+  {
+    schedule: CURRENT_YEAR_SCHEDULE,
+    timeZone: SCHEDULE_TIMEZONE,
+    timeoutSeconds: 540,
+    memory: '512MiB',
+    retryCount: 0,
+  },
+  async () => {
+    // ─── Kill Switch ─────────────────────────────────────────────────────────
+    if (isIngestionPaused()) {
+      logger.info('Ingestion is paused via INGESTION_PAUSED env var — skipping current-year run');
+      return;
+    }
+
+    const startTime = Date.now();
+    logger.info('MMDB current-year ingestion triggered', {
+      dryRun: DRY_RUN,
+      schedule: CURRENT_YEAR_SCHEDULE,
+    });
+
+    try {
+      const token = process.env.GITHUB_TOKEN;
+
+      if (!token) {
+        logger.error('GITHUB_TOKEN environment variable is not set');
+        throw new Error('GITHUB_TOKEN environment variable is not configured');
+      }
+
+      const result = await runCurrentYearIngestion(token, DRY_RUN);
+
+      const durationMs = Date.now() - startTime;
+      logger.info('MMDB current-year ingestion completed', {
+        durationMs,
+        durationSeconds: Math.round(durationMs / 1000),
+        moviesIngested: result.moviesIngested,
+        seriesIngested: result.seriesIngested,
+        peopleIngested: result.peopleIngested,
+        prsCreated: result.prsCreated,
+        errorCount: result.errors.length,
+        errors: result.errors.slice(0, 10),
+      });
+
+      if (result.errors.length > 0) {
+        logger.warn(`Current-year ingestion completed with ${result.errors.length} errors`);
+      }
+    } catch (error: any) {
+      const durationMs = Date.now() - startTime;
+      logger.error('MMDB current-year ingestion failed', {
+        durationMs,
+        error: error.message,
+        stack: error.stack,
+      });
+      throw error;
     }
   }
 );

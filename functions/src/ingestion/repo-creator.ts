@@ -189,7 +189,7 @@ export async function createYearRepo(
     name: repoName,
     description: `MMDB ${year} — Movies and series from ${year}`,
     visibility: 'public',
-    auto_init: false,
+    auto_init: true,
     has_issues: true,
     has_projects: false,
     has_wiki: false,
@@ -203,7 +203,18 @@ export async function createYearRepo(
   // Wait for GitHub to propagate
   await new Promise(resolve => setTimeout(resolve, 5000));
 
-  // Push template files (first file creates the master branch implicitly)
+  // Rename default branch from 'main' to 'master'
+  await octokit.repos.renameBranch({
+    owner: GITHUB_ORG,
+    repo: repoName,
+    branch: 'main',
+    new_name: 'master',
+  });
+
+  // Wait for rename to propagate
+  await new Promise(resolve => setTimeout(resolve, 2000));
+
+  // Push template files
   const files = [
     { path: 'data/movies/index.json', content: '[]\n' },
     { path: 'data/series/index.json', content: '[]\n' },
@@ -214,6 +225,22 @@ export async function createYearRepo(
   ];
 
   for (const file of files) {
+    // Get sha if file already exists (e.g., README.md from auto_init)
+    let sha: string | undefined;
+    try {
+      const { data } = await octokit.repos.getContent({
+        owner: GITHUB_ORG,
+        repo: repoName,
+        path: file.path,
+        ref: 'master',
+      });
+      if ('sha' in data) {
+        sha = data.sha;
+      }
+    } catch (error: any) {
+      if (error.status !== 404) throw error;
+    }
+
     await octokit.repos.createOrUpdateFileContents({
       owner: GITHUB_ORG,
       repo: repoName,
@@ -221,11 +248,31 @@ export async function createYearRepo(
       message: `chore: initialize ${file.path}`,
       content: Buffer.from(file.content).toString('base64'),
       branch: 'master',
+      ...(sha && { sha }),
     });
   }
 
   // Update mmdb-meta/repos.json
   await updateMetaRepos(octokit, repoName, year);
+
+  // Set branch protection (required for auto-merge to work)
+  try {
+    await octokit.repos.updateBranchProtection({
+      owner: GITHUB_ORG,
+      repo: repoName,
+      branch: 'master',
+      required_status_checks: {
+        strict: false,
+        contexts: ['validate'],
+      },
+      enforce_admins: false,
+      required_pull_request_reviews: null,
+      restrictions: null,
+    });
+    logger.info('Branch protection set', { repo: repoName });
+  } catch (error: any) {
+    logger.warn('Could not set branch protection (may need admin token)', { repo: repoName, error: error.message });
+  }
 
   logger.info(`Repo created successfully: ${repoName}`, {
     year,
@@ -273,7 +320,11 @@ MIT
 }
 
 async function updateMetaRepos(octokit: Octokit, repoName: string, year: number): Promise<void> {
-  let repos: Array<{ name: string; year: number; created_at: string }> = [];
+  let metaFile: { version: string; last_updated: string; repositories: Array<Record<string, unknown>> } = {
+    version: '1.0.0',
+    last_updated: new Date().toISOString().split('T')[0],
+    repositories: [],
+  };
   let sha: string | undefined;
 
   try {
@@ -287,23 +338,34 @@ async function updateMetaRepos(octokit: Octokit, repoName: string, year: number)
     if ('content' in data) {
       sha = data.sha;
       const content = Buffer.from(data.content, 'base64').toString('utf-8');
-      repos = JSON.parse(content);
+      metaFile = JSON.parse(content);
     }
   } catch (error: any) {
     if (error.status !== 404) throw error;
     // File doesn't exist yet — we'll create it
   }
 
-  repos.push({
+  metaFile.repositories.push({
     name: repoName,
+    type: 'data',
+    url: `https://github.com/${GITHUB_ORG}/${repoName}`,
+    description: `Movies and series from ${year}`,
+    entity_count: 0,
     year,
-    created_at: new Date().toISOString(),
+    visibility: 'public',
   });
 
-  // Sort by year
-  repos.sort((a, b) => a.year - b.year);
+  metaFile.last_updated = new Date().toISOString().split('T')[0];
 
-  const content = Buffer.from(JSON.stringify(repos, null, 2) + '\n').toString('base64');
+  // Sort repositories by year (data repos) then name
+  metaFile.repositories.sort((a, b) => {
+    const yearA = (a.year as number) || 0;
+    const yearB = (b.year as number) || 0;
+    if (yearA !== yearB) return yearA - yearB;
+    return (a.name as string).localeCompare(b.name as string);
+  });
+
+  const content = Buffer.from(JSON.stringify(metaFile, null, 2) + '\n').toString('base64');
 
   await octokit.repos.createOrUpdateFileContents({
     owner: GITHUB_ORG,
