@@ -15,6 +15,8 @@ const STATE_PATH = 'ingestion/state.json';
 export interface IngestionState {
   backlog_offset: number;
   backlog_current_year: number;
+  backward_year: number;
+  backward_offset: number;
   last_recent_timestamp: string;
   last_run: string;
   total_ingested: {
@@ -39,6 +41,8 @@ export interface IngestionState {
 const DEFAULT_STATE: IngestionState = {
   backlog_offset: 0,
   backlog_current_year: DEFAULT_START_YEAR,
+  backward_year: DEFAULT_START_YEAR - 1,
+  backward_offset: 0,
   last_recent_timestamp: '2026-01-01T00:00:00Z',
   last_run: new Date().toISOString(),
   total_ingested: {
@@ -184,6 +188,25 @@ export async function advanceBacklog(
       backlog_offset: newOffset,
     });
     logger.info(`Backlog offset advanced to ${newOffset}`);
+  }
+}
+
+export async function advanceBackwardBacklog(
+  newOffset: number,
+  yearExhausted: boolean,
+  currentYear: number
+): Promise<void> {
+  if (yearExhausted) {
+    await updateState({
+      backward_offset: 0,
+      backward_year: currentYear - 1,
+    });
+    logger.info(`Backward year ${currentYear} exhausted, advancing to ${currentYear - 1}`);
+  } else {
+    await updateState({
+      backward_offset: newOffset,
+    });
+    logger.info(`Backward offset advanced to ${newOffset}`);
   }
 }
 

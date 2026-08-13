@@ -5,8 +5,14 @@
 /** Maximum number of titles (movies + series) to ingest per run */
 export const MAX_TITLES_PER_RUN = 100;
 
-/** Number of backlog titles to fetch per run */
+/** Number of backlog titles to fetch per run (total: forward + backward) */
 export const BACKLOG_LIMIT = 60;
+
+/** Backlog budget split: titles for forward pass (2010 → current year) */
+export const FORWARD_BACKLOG_LIMIT = 30;
+
+/** Backlog budget split: titles for backward pass (2009 → 1888) */
+export const BACKWARD_BACKLOG_LIMIT = 30;
 
 /** Number of recent titles to fetch per run */
 export const RECENT_LIMIT = 40;
@@ -61,3 +67,6 @@ export const CURRENT_YEAR_SCHEDULE = 'every day 02:00';
 
 /** Minimum year for repo creation (first motion picture) */
 export const MIN_YEAR = 1888;
+
+/** Minimum year for backward backlog (first films ever made) */
+export const MIN_BACKLOG_YEAR = 1888;

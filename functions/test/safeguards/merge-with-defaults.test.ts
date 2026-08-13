@@ -11,6 +11,8 @@ import { IngestionState } from '../../src/ingestion/state.js';
 const DEFAULT_STATE: IngestionState = {
   backlog_offset: 0,
   backlog_current_year: 2010,
+  backward_year: 2009,
+  backward_offset: 0,
   last_recent_timestamp: '2026-01-01T00:00:00Z',
   last_run: '2026-01-01T00:00:00Z',
   total_ingested: {
@@ -106,6 +108,8 @@ describe('Merge With Defaults', () => {
       const completeState: IngestionState = {
         backlog_offset: 25,
         backlog_current_year: 2014,
+        backward_year: 2005,
+        backward_offset: 10,
         last_recent_timestamp: '2026-07-01T00:00:00Z',
         last_run: '2026-07-10T08:00:00Z',
         total_ingested: {

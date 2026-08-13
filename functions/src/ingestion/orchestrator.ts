@@ -20,9 +20,12 @@ import {
 } from './wikidata-client.js';
 import { GitHubClient } from './github-client.js';
 import { normalizeMovie, normalizePerson, normalizeSeries, MMDBMovie, MMDBSeries, MMDBPerson } from './normalizer.js';
-import { getState, updateState, incrementIngested, advanceBacklog, acquireLock, releaseLock } from './state.js';
+import { getState, updateState, incrementIngested, advanceBacklog, advanceBackwardBacklog, acquireLock, releaseLock } from './state.js';
 import {
   BACKLOG_LIMIT,
+  FORWARD_BACKLOG_LIMIT,
+  BACKWARD_BACKLOG_LIMIT,
+  MIN_BACKLOG_YEAR,
   RECENT_LIMIT,
   MAX_TITLES_PER_RUN,
   MAX_YEAR,
@@ -96,13 +99,17 @@ export async function runIngestion(githubToken: string, dryRun: boolean = false)
     });
 
     // ─── Pass 1: Backlog ─────────────────────────────────────────────────────
-    const backlogTitles = await runBacklogPass(github, state.backlog_current_year, state.backlog_offset, result, dryRun);
+    // Forward pass (2010 → current year)
+    const forwardTitles = await runBacklogPass(github, state.backlog_current_year, state.backlog_offset, result, dryRun);
+
+    // Backward pass (2009 → 1888)
+    const backwardTitles = await runBackwardPass(github, state.backward_year, state.backward_offset, result, dryRun);
 
     // ─── Pass 2: Recent ──────────────────────────────────────────────────────
     const recentTitles = await runRecentPass(github, state.last_recent_timestamp, result);
 
     // ─── Merge title batches ─────────────────────────────────────────────────
-    const allTitles = mergeBatches(backlogTitles, recentTitles);
+    const allTitles = mergeBatches(mergeBatches(forwardTitles, backwardTitles), recentTitles);
 
     // ─── Create PRs for movies and series ────────────────────────────────────
     if (!dryRun) {
@@ -113,7 +120,8 @@ export async function runIngestion(githubToken: string, dryRun: boolean = false)
 
     // ─── Pass 3: People ──────────────────────────────────────────────────────
     const allWikidataIds = [
-      ...backlogTitles.movieWikidataIds,
+      ...forwardTitles.movieWikidataIds,
+      ...backwardTitles.movieWikidataIds,
       ...recentTitles.movieWikidataIds,
     ];
 
@@ -180,8 +188,8 @@ async function runBacklogPass(
   logger.info('Backlog pass', { year: currentYear, offset });
 
   let titlesIngested = 0;
-  const moviesLimit = Math.floor(BACKLOG_LIMIT * 0.7); // 70% movies
-  const seriesLimit = BACKLOG_LIMIT - moviesLimit;     // 30% series
+  const moviesLimit = Math.floor(FORWARD_BACKLOG_LIMIT * 0.7); // 70% movies
+  const seriesLimit = FORWARD_BACKLOG_LIMIT - moviesLimit;     // 30% series
 
   // Fetch movies for backlog year
   try {
@@ -235,7 +243,7 @@ async function runBacklogPass(
     const allExistingMovieIds = new Set([...existingMovieIds, ...pendingMovieIds]);
 
     for (const wikiMovie of movies) {
-      if (titlesIngested >= BACKLOG_LIMIT) break;
+      if (titlesIngested >= FORWARD_BACKLOG_LIMIT) break;
 
       try {
         const movie = normalizeMovie(wikiMovie);
@@ -280,7 +288,7 @@ async function runBacklogPass(
         const allExistingSeriesIds = new Set([...existingSeriesIds, ...pendingSeriesIds]);
 
         for (const wikiSeries of seriesList) {
-          if (titlesIngested >= BACKLOG_LIMIT) break;
+          if (titlesIngested >= FORWARD_BACKLOG_LIMIT) break;
 
           try {
             const series = normalizeSeries(wikiSeries);
@@ -312,6 +320,164 @@ async function runBacklogPass(
   } catch (error: any) {
     result.errors.push(`Backlog movie query error for year ${currentYear}: ${error.message}`);
     logger.error('Backlog movie query failed', { year: currentYear, error: error.message });
+  }
+
+  return batch;
+}
+
+async function runBackwardPass(
+  github: GitHubClient,
+  currentYear: number,
+  offset: number,
+  result: IngestionResult,
+  dryRun: boolean = false
+): Promise<TitleBatch> {
+  const batch: TitleBatch = {
+    movies: new Map(),
+    series: new Map(),
+    movieWikidataIds: [],
+  };
+
+  if (currentYear < MIN_BACKLOG_YEAR) {
+    logger.info('Backward backlog complete — all years processed');
+    return batch;
+  }
+
+  logger.info('Backward pass', { year: currentYear, offset });
+
+  let titlesIngested = 0;
+  const moviesLimit = Math.floor(BACKWARD_BACKLOG_LIMIT * 0.7);
+  const seriesLimit = BACKWARD_BACKLOG_LIMIT - moviesLimit;
+
+  // Fetch movies for backward year
+  try {
+    const movieQuery = buildMovieQuery(currentYear, moviesLimit, offset);
+    const movieResults = await queryWikidata(movieQuery);
+    const movies = parseMovieResults(movieResults);
+
+    // ─── Sanity Check: movie result count ────────────────────────────────────
+    if (!isResultCountSane(movies.length)) {
+      logger.error('Backward movie query returned too many results — skipping', {
+        year: currentYear,
+        count: movies.length,
+        threshold: MAX_RESULTS_SANITY,
+      });
+      result.errors.push(`Sanity check failed: backward movie query for year ${currentYear} returned ${movies.length} results (max: ${MAX_RESULTS_SANITY})`);
+      return batch;
+    }
+
+    // Check which repo this year maps to
+    const yearRepo = `mmdb-${currentYear}`;
+    const repoAvailable = await github.repoExists(yearRepo);
+
+    if (!repoAvailable) {
+      // Check creation cap (max per run) — shared with forward pass
+      const currentState = await getState();
+      if ((currentState.repos_created_this_run || 0) >= MAX_REPOS_PER_RUN) {
+        logger.info(`Repo ${yearRepo} missing but creation cap reached, skipping backward`);
+        await advanceBackwardBacklog(0, true, currentYear);
+        return batch;
+      }
+
+      const creationResult = await createYearRepo(github.getOctokit(), currentYear, dryRun);
+      if (!creationResult.created) {
+        logger.warn(`Could not create ${yearRepo}: ${creationResult.reason}`);
+        await advanceBackwardBacklog(0, true, currentYear);
+        return batch;
+      }
+
+      await updateState({
+        repos_created_this_run: (currentState.repos_created_this_run || 0) + 1,
+        last_repo_created: yearRepo,
+        last_repo_created_at: new Date().toISOString(),
+      });
+
+      logger.info(`Created new repo: ${yearRepo} (backward), continuing ingestion`);
+    }
+
+    // Get existing IDs for deduplication
+    const existingMovieIds = await github.getExistingMovieIds(yearRepo);
+    const pendingMovieIds = await github.getMoviesInPendingPRs(yearRepo);
+    const allExistingMovieIds = new Set([...existingMovieIds, ...pendingMovieIds]);
+
+    for (const wikiMovie of movies) {
+      if (titlesIngested >= BACKWARD_BACKLOG_LIMIT) break;
+
+      try {
+        const movie = normalizeMovie(wikiMovie);
+
+        if (allExistingMovieIds.has(movie.id)) {
+          logger.debug('Skipping duplicate movie (backward)', { id: movie.id });
+          continue;
+        }
+
+        if (!batch.movies.has(currentYear)) {
+          batch.movies.set(currentYear, []);
+        }
+        batch.movies.get(currentYear)!.push(movie);
+        batch.movieWikidataIds.push(wikiMovie.wikidataId);
+        titlesIngested++;
+      } catch (error: any) {
+        result.errors.push(`Backward movie normalize error: ${wikiMovie.label} — ${error.message}`);
+        logger.error('Backward movie normalization failed', { movie: wikiMovie.label, error: error.message });
+      }
+    }
+
+    // Determine if year is exhausted
+    const yearExhausted = movies.length < moviesLimit;
+
+    // Fetch series for backward year
+    try {
+      const seriesQuery = buildSeriesQuery(currentYear, seriesLimit, Math.floor(offset * 0.3));
+      const seriesResults = await queryWikidata(seriesQuery);
+      const seriesList = parseSeriesResults(seriesResults);
+
+      // ─── Sanity Check: series result count ─────────────────────────────────
+      if (!isResultCountSane(seriesList.length)) {
+        logger.error('Backward series query returned too many results — skipping', {
+          year: currentYear,
+          count: seriesList.length,
+          threshold: MAX_RESULTS_SANITY,
+        });
+        result.errors.push(`Sanity check failed: backward series query for year ${currentYear} returned ${seriesList.length} results (max: ${MAX_RESULTS_SANITY})`);
+      } else {
+        const existingSeriesIds = await github.getExistingSeriesIds(yearRepo);
+        const pendingSeriesIds = await github.getSeriesInPendingPRs(yearRepo);
+        const allExistingSeriesIds = new Set([...existingSeriesIds, ...pendingSeriesIds]);
+
+        for (const wikiSeries of seriesList) {
+          if (titlesIngested >= BACKWARD_BACKLOG_LIMIT) break;
+
+          try {
+            const series = normalizeSeries(wikiSeries);
+
+            if (allExistingSeriesIds.has(series.id)) {
+              logger.debug('Skipping duplicate series (backward)', { id: series.id });
+              continue;
+            }
+
+            if (!batch.series.has(currentYear)) {
+              batch.series.set(currentYear, []);
+            }
+            batch.series.get(currentYear)!.push(series);
+            titlesIngested++;
+          } catch (error: any) {
+            result.errors.push(`Backward series normalize error: ${wikiSeries.label} — ${error.message}`);
+            logger.error('Backward series normalization failed', { series: wikiSeries.label, error: error.message });
+          }
+        }
+      }
+    } catch (error: any) {
+      result.errors.push(`Backward series query error for year ${currentYear}: ${error.message}`);
+      logger.error('Backward series query failed', { year: currentYear, error: error.message });
+    }
+
+    // Update backward backlog state
+    const newOffset = offset + moviesLimit;
+    await advanceBackwardBacklog(newOffset, yearExhausted, currentYear);
+  } catch (error: any) {
+    result.errors.push(`Backward movie query error for year ${currentYear}: ${error.message}`);
+    logger.error('Backward movie query failed', { year: currentYear, error: error.message });
   }
 
   return batch;
