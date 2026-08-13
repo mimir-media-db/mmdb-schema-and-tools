@@ -7,8 +7,8 @@
 import { Octokit } from '@octokit/rest';
 import { logger } from 'firebase-functions/v2';
 import { MMDBMovie, MMDBPerson, MMDBSeries } from './normalizer.js';
-import { generateSlug } from './id-generator.js';
 import { GITHUB_ORG } from '../config.js';
+import { getMovieFilePath, getSeriesFilePath, getPersonFilePath, serializeEntity } from './github-helpers.js';
 
 export class GitHubClient {
   private octokit: Octokit;
@@ -345,10 +345,8 @@ export class GitHubClient {
   }
 
   async addMovieToPR(repo: string, branch: string, movie: MMDBMovie): Promise<void> {
-    const slug = generateSlug(movie.title);
-    const filename = `${slug}-${movie.year}.json`;
-    const path = `data/movies/${filename}`;
-    const content = JSON.stringify(movie, null, 2) + '\n';
+    const path = getMovieFilePath(movie);
+    const content = serializeEntity(movie);
 
     await this.createOrUpdateFile(
       repo,
@@ -360,10 +358,8 @@ export class GitHubClient {
   }
 
   async addSeriesToPR(repo: string, branch: string, series: MMDBSeries): Promise<void> {
-    const slug = generateSlug(series.title);
-    const filename = `${slug}.json`;
-    const path = `data/series/${filename}`;
-    const content = JSON.stringify(series, null, 2) + '\n';
+    const path = getSeriesFilePath(series);
+    const content = serializeEntity(series);
 
     await this.createOrUpdateFile(
       repo,
@@ -375,9 +371,8 @@ export class GitHubClient {
   }
 
   async addPersonToPR(repo: string, branch: string, person: MMDBPerson): Promise<void> {
-    const filename = `${person.id}.json`;
-    const path = `data/people/${filename}`;
-    const content = JSON.stringify(person, null, 2) + '\n';
+    const path = getPersonFilePath(person);
+    const content = serializeEntity(person);
 
     await this.createOrUpdateFile(
       repo,
