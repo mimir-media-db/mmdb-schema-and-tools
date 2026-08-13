@@ -3,9 +3,11 @@
  * State is stored as a JSON file at ingestion/state.json in the mmdb-meta repo.
  */
 
+import crypto from 'crypto';
 import { logger } from 'firebase-functions/v2';
 import { Octokit } from '@octokit/rest';
 import { GITHUB_ORG, DEFAULT_START_YEAR } from '../config.js';
+import { mergeStateWithDefaults, shouldAcquireLock } from './safeguards.js';
 
 const META_REPO = 'mmdb-meta';
 const STATE_PATH = 'ingestion/state.json';
@@ -20,6 +22,12 @@ export interface IngestionState {
     series: number;
     people: number;
   };
+  lock: {
+    running: boolean;
+    started_at: string | null;
+    run_id: string | null;
+  };
+  consecutive_empty_runs: number;
 }
 
 const DEFAULT_STATE: IngestionState = {
@@ -32,6 +40,12 @@ const DEFAULT_STATE: IngestionState = {
     series: 0,
     people: 0,
   },
+  lock: {
+    running: false,
+    started_at: null,
+    run_id: null,
+  },
+  consecutive_empty_runs: 0,
 };
 
 let octokit: Octokit | null = null;
@@ -44,6 +58,13 @@ function getOctokit(): Octokit {
     octokit = new Octokit({ auth: token });
   }
   return octokit;
+}
+
+/**
+ * Merge fetched state with defaults to handle old state files missing new fields.
+ */
+function mergeWithDefaults(raw: Partial<IngestionState>): IngestionState {
+  return mergeStateWithDefaults(raw, DEFAULT_STATE);
 }
 
 export async function getState(): Promise<IngestionState> {
@@ -60,7 +81,8 @@ export async function getState(): Promise<IngestionState> {
     if ('content' in data) {
       fileSha = data.sha;
       const content = Buffer.from(data.content, 'base64').toString('utf-8');
-      return JSON.parse(content) as IngestionState;
+      const raw = JSON.parse(content) as Partial<IngestionState>;
+      return mergeWithDefaults(raw);
     }
   } catch (error: any) {
     if (error.status === 404) {
@@ -151,4 +173,55 @@ export async function advanceBacklog(
     });
     logger.info(`Backlog offset advanced to ${newOffset}`);
   }
+}
+
+/**
+ * Acquire a concurrency lock for the ingestion run.
+ * Returns { acquired: true } if lock was obtained, or { acquired: false, reason } if not.
+ * Stale locks (older than LOCK_TIMEOUT_MS) are automatically broken.
+ */
+export async function acquireLock(): Promise<{ acquired: boolean; reason?: string }> {
+  const state = await getState();
+
+  const decision = shouldAcquireLock(state.lock);
+
+  if (!decision.canAcquire) {
+    return {
+      acquired: false,
+      reason: decision.reason,
+    };
+  }
+
+  if (decision.isStale) {
+    logger.warn('Breaking stale lock', {
+      run_id: state.lock.run_id,
+      started_at: state.lock.started_at,
+    });
+  }
+
+  const runId = crypto.randomUUID();
+  await updateState({
+    lock: {
+      running: true,
+      started_at: new Date().toISOString(),
+      run_id: runId,
+    },
+  });
+
+  logger.info('Lock acquired', { run_id: runId });
+  return { acquired: true };
+}
+
+/**
+ * Release the concurrency lock after a run completes.
+ */
+export async function releaseLock(): Promise<void> {
+  await updateState({
+    lock: {
+      running: false,
+      started_at: null,
+      run_id: null,
+    },
+  });
+  logger.info('Lock released');
 }

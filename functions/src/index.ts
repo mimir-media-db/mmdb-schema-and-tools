@@ -10,6 +10,7 @@ import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { onRequest } from 'firebase-functions/v2/https';
 import { logger } from 'firebase-functions/v2';
 import { runIngestion } from './ingestion/orchestrator.js';
+import { isIngestionPaused } from './ingestion/safeguards.js';
 import { SCHEDULE_CRON, SCHEDULE_TIMEZONE } from './config.js';
 
 // Environment-based dry run flag
@@ -30,6 +31,12 @@ export const mmdbIngest = onSchedule(
     retryCount: 0, // Don't retry — function is idempotent but we don't want duplicate runs
   },
   async () => {
+    // ─── Kill Switch ─────────────────────────────────────────────────────────
+    if (isIngestionPaused()) {
+      logger.info('Ingestion is paused via INGESTION_PAUSED env var — skipping scheduled run');
+      return;
+    }
+
     const startTime = Date.now();
     logger.info('MMDB ingestion triggered', {
       dryRun: DRY_RUN,
@@ -94,6 +101,13 @@ export const mmdbIngestManual = onRequest(
     invoker: 'public',
   },
   async (req, res) => {
+    // ─── Kill Switch ─────────────────────────────────────────────────────────
+    if (isIngestionPaused()) {
+      logger.info('Ingestion is paused via INGESTION_PAUSED env var — skipping manual run');
+      res.status(200).json({ paused: true });
+      return;
+    }
+
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'Method not allowed. Use POST.' });
       return;

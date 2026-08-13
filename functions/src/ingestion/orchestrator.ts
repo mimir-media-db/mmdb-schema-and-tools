@@ -20,7 +20,7 @@ import {
 } from './wikidata-client.js';
 import { GitHubClient } from './github-client.js';
 import { normalizeMovie, normalizePerson, normalizeSeries, MMDBMovie, MMDBSeries, MMDBPerson } from './normalizer.js';
-import { getState, updateState, incrementIngested, advanceBacklog } from './state.js';
+import { getState, updateState, incrementIngested, advanceBacklog, acquireLock, releaseLock } from './state.js';
 import {
   BACKLOG_LIMIT,
   RECENT_LIMIT,
@@ -29,7 +29,10 @@ import {
   PEOPLE_REPO,
   BRANCH_PREFIX,
   MAX_PEOPLE_PER_QUERY,
+  MAX_EMPTY_RUNS,
+  MAX_RESULTS_SANITY,
 } from '../config.js';
+import { shouldAutoPause, isResultCountSane } from './safeguards.js';
 
 export interface IngestionResult {
   moviesIngested: number;
@@ -37,6 +40,8 @@ export interface IngestionResult {
   peopleIngested: number;
   prsCreated: string[];
   errors: string[];
+  autoPaused?: boolean;
+  lockBlocked?: boolean;
 }
 
 interface TitleBatch {
@@ -54,57 +59,99 @@ export async function runIngestion(githubToken: string, dryRun: boolean = false)
     errors: [],
   };
 
-  const github = new GitHubClient(githubToken);
+  // ─── Anomaly Detection: check consecutive empty runs ───────────────────────
   const state = await getState();
-  const runDate = new Date().toISOString().split('T')[0];
-  const branchSuffix = runDate.replace(/-/g, '');
-
-  logger.info('Starting ingestion run', {
-    state,
-    dryRun,
-    runDate,
-  });
-
-  // ─── Pass 1: Backlog ───────────────────────────────────────────────────────
-  const backlogTitles = await runBacklogPass(github, state.backlog_current_year, state.backlog_offset, result);
-
-  // ─── Pass 2: Recent ────────────────────────────────────────────────────────
-  const recentTitles = await runRecentPass(github, state.last_recent_timestamp, result);
-
-  // ─── Merge title batches ───────────────────────────────────────────────────
-  const allTitles = mergeBatches(backlogTitles, recentTitles);
-
-  // ─── Create PRs for movies and series ──────────────────────────────────────
-  if (!dryRun) {
-    await createTitlePRs(github, allTitles, branchSuffix, result);
-  } else {
-    logDryRunTitles(allTitles, result);
+  if (shouldAutoPause(state.consecutive_empty_runs)) {
+    logger.error('Ingestion auto-paused: too many consecutive empty runs', {
+      consecutive_empty_runs: state.consecutive_empty_runs,
+      threshold: MAX_EMPTY_RUNS,
+    });
+    result.autoPaused = true;
+    return result;
   }
 
-  // ─── Pass 3: People ────────────────────────────────────────────────────────
-  const allWikidataIds = [
-    ...backlogTitles.movieWikidataIds,
-    ...recentTitles.movieWikidataIds,
-  ];
-
-  if (allWikidataIds.length > 0) {
-    await runPeoplePass(github, allWikidataIds, branchSuffix, dryRun, result);
+  // ─── Concurrency Lock ──────────────────────────────────────────────────────
+  const lockResult = await acquireLock();
+  if (!lockResult.acquired) {
+    logger.warn('Ingestion skipped: lock not acquired', { reason: lockResult.reason });
+    result.lockBlocked = true;
+    result.errors.push(`Lock not acquired: ${lockResult.reason}`);
+    return result;
   }
 
-  // ─── Update state ──────────────────────────────────────────────────────────
-  if (!dryRun) {
-    await incrementIngested(result.moviesIngested, result.seriesIngested, result.peopleIngested);
+  try {
+    const github = new GitHubClient(githubToken);
+    const runDate = new Date().toISOString().split('T')[0];
+    const branchSuffix = runDate.replace(/-/g, '');
+
+    logger.info('Starting ingestion run', {
+      state,
+      dryRun,
+      runDate,
+    });
+
+    // ─── Pass 1: Backlog ─────────────────────────────────────────────────────
+    const backlogTitles = await runBacklogPass(github, state.backlog_current_year, state.backlog_offset, result);
+
+    // ─── Pass 2: Recent ──────────────────────────────────────────────────────
+    const recentTitles = await runRecentPass(github, state.last_recent_timestamp, result);
+
+    // ─── Merge title batches ─────────────────────────────────────────────────
+    const allTitles = mergeBatches(backlogTitles, recentTitles);
+
+    // ─── Create PRs for movies and series ────────────────────────────────────
+    if (!dryRun) {
+      await createTitlePRs(github, allTitles, branchSuffix, result);
+    } else {
+      logDryRunTitles(allTitles, result);
+    }
+
+    // ─── Pass 3: People ──────────────────────────────────────────────────────
+    const allWikidataIds = [
+      ...backlogTitles.movieWikidataIds,
+      ...recentTitles.movieWikidataIds,
+    ];
+
+    if (allWikidataIds.length > 0) {
+      await runPeoplePass(github, allWikidataIds, branchSuffix, dryRun, result);
+    }
+
+    // ─── Update state ────────────────────────────────────────────────────────
+    if (!dryRun) {
+      await incrementIngested(result.moviesIngested, result.seriesIngested, result.peopleIngested);
+
+      // ─── Anomaly Detection: track consecutive empty runs ───────────────────
+      const totalTitles = result.moviesIngested + result.seriesIngested;
+      if (totalTitles === 0) {
+        const currentState = await getState();
+        const newCount = currentState.consecutive_empty_runs + 1;
+        await updateState({ consecutive_empty_runs: newCount });
+        logger.warn('Empty run detected', { consecutive_empty_runs: newCount });
+
+        if (newCount >= MAX_EMPTY_RUNS) {
+          logger.error('Ingestion will be auto-paused on next run', {
+            consecutive_empty_runs: newCount,
+            threshold: MAX_EMPTY_RUNS,
+          });
+        }
+      } else {
+        // Reset counter on successful ingestion
+        await updateState({ consecutive_empty_runs: 0 });
+      }
+    }
+
+    logger.info('Ingestion run complete', {
+      moviesIngested: result.moviesIngested,
+      seriesIngested: result.seriesIngested,
+      peopleIngested: result.peopleIngested,
+      prsCreated: result.prsCreated,
+      errors: result.errors.length,
+    });
+
+    return result;
+  } finally {
+    await releaseLock();
   }
-
-  logger.info('Ingestion run complete', {
-    moviesIngested: result.moviesIngested,
-    seriesIngested: result.seriesIngested,
-    peopleIngested: result.peopleIngested,
-    prsCreated: result.prsCreated,
-    errors: result.errors.length,
-  });
-
-  return result;
 }
 
 async function runBacklogPass(
@@ -135,6 +182,17 @@ async function runBacklogPass(
     const movieQuery = buildMovieQuery(currentYear, moviesLimit, offset);
     const movieResults = await queryWikidata(movieQuery);
     const movies = parseMovieResults(movieResults);
+
+    // ─── Sanity Check: movie result count ────────────────────────────────────
+    if (!isResultCountSane(movies.length)) {
+      logger.error('Backlog movie query returned too many results — skipping', {
+        year: currentYear,
+        count: movies.length,
+        threshold: MAX_RESULTS_SANITY,
+      });
+      result.errors.push(`Sanity check failed: backlog movie query for year ${currentYear} returned ${movies.length} results (max: ${MAX_RESULTS_SANITY})`);
+      return batch;
+    }
 
     // Check which repo this year maps to
     const yearRepo = `mmdb-${currentYear}`;
@@ -183,29 +241,39 @@ async function runBacklogPass(
       const seriesResults = await queryWikidata(seriesQuery);
       const seriesList = parseSeriesResults(seriesResults);
 
-      const existingSeriesIds = await github.getExistingSeriesIds(yearRepo);
-      const pendingSeriesIds = await github.getSeriesInPendingPRs(yearRepo);
-      const allExistingSeriesIds = new Set([...existingSeriesIds, ...pendingSeriesIds]);
+      // ─── Sanity Check: series result count ─────────────────────────────────
+      if (!isResultCountSane(seriesList.length)) {
+        logger.error('Backlog series query returned too many results — skipping', {
+          year: currentYear,
+          count: seriesList.length,
+          threshold: MAX_RESULTS_SANITY,
+        });
+        result.errors.push(`Sanity check failed: backlog series query for year ${currentYear} returned ${seriesList.length} results (max: ${MAX_RESULTS_SANITY})`);
+      } else {
+        const existingSeriesIds = await github.getExistingSeriesIds(yearRepo);
+        const pendingSeriesIds = await github.getSeriesInPendingPRs(yearRepo);
+        const allExistingSeriesIds = new Set([...existingSeriesIds, ...pendingSeriesIds]);
 
-      for (const wikiSeries of seriesList) {
-        if (titlesIngested >= BACKLOG_LIMIT) break;
+        for (const wikiSeries of seriesList) {
+          if (titlesIngested >= BACKLOG_LIMIT) break;
 
-        try {
-          const series = normalizeSeries(wikiSeries);
+          try {
+            const series = normalizeSeries(wikiSeries);
 
-          if (allExistingSeriesIds.has(series.id)) {
-            logger.debug('Skipping duplicate series', { id: series.id });
-            continue;
+            if (allExistingSeriesIds.has(series.id)) {
+              logger.debug('Skipping duplicate series', { id: series.id });
+              continue;
+            }
+
+            if (!batch.series.has(currentYear)) {
+              batch.series.set(currentYear, []);
+            }
+            batch.series.get(currentYear)!.push(series);
+            titlesIngested++;
+          } catch (error: any) {
+            result.errors.push(`Series normalize error: ${wikiSeries.label} — ${error.message}`);
+            logger.error('Series normalization failed', { series: wikiSeries.label, error: error.message });
           }
-
-          if (!batch.series.has(currentYear)) {
-            batch.series.set(currentYear, []);
-          }
-          batch.series.get(currentYear)!.push(series);
-          titlesIngested++;
-        } catch (error: any) {
-          result.errors.push(`Series normalize error: ${wikiSeries.label} — ${error.message}`);
-          logger.error('Series normalization failed', { series: wikiSeries.label, error: error.message });
         }
       }
     } catch (error: any) {
@@ -250,37 +318,46 @@ async function runRecentPass(
     const recentResults = await queryWikidata(recentMovieQuery);
     const recentMovies = parseMovieResults(recentResults);
 
-    for (const wikiMovie of recentMovies) {
-      if (titlesIngested >= RECENT_LIMIT) break;
-      if (wikiMovie.year < 1900 || wikiMovie.year > MAX_YEAR) continue;
+    // ─── Sanity Check: recent movie result count ─────────────────────────────
+    if (!isResultCountSane(recentMovies.length)) {
+      logger.error('Recent movie query returned too many results — skipping', {
+        count: recentMovies.length,
+        threshold: MAX_RESULTS_SANITY,
+      });
+      result.errors.push(`Sanity check failed: recent movie query returned ${recentMovies.length} results (max: ${MAX_RESULTS_SANITY})`);
+    } else {
+      for (const wikiMovie of recentMovies) {
+        if (titlesIngested >= RECENT_LIMIT) break;
+        if (wikiMovie.year < 1900 || wikiMovie.year > MAX_YEAR) continue;
 
-      try {
-        const yearRepo = `mmdb-${wikiMovie.year}`;
-        const repoAvailable = await github.repoExists(yearRepo);
+        try {
+          const yearRepo = `mmdb-${wikiMovie.year}`;
+          const repoAvailable = await github.repoExists(yearRepo);
 
-        if (!repoAvailable) {
-          logger.warn(`Repo ${yearRepo} missing, skipping recent movie`, { title: wikiMovie.label });
-          continue;
+          if (!repoAvailable) {
+            logger.warn(`Repo ${yearRepo} missing, skipping recent movie`, { title: wikiMovie.label });
+            continue;
+          }
+
+          const movie = normalizeMovie(wikiMovie);
+
+          // Dedup check
+          const existingIds = await github.getExistingMovieIds(yearRepo);
+          const pendingIds = await github.getMoviesInPendingPRs(yearRepo);
+          if (existingIds.has(movie.id) || pendingIds.has(movie.id)) {
+            continue;
+          }
+
+          if (!batch.movies.has(wikiMovie.year)) {
+            batch.movies.set(wikiMovie.year, []);
+          }
+          batch.movies.get(wikiMovie.year)!.push(movie);
+          batch.movieWikidataIds.push(wikiMovie.wikidataId);
+          titlesIngested++;
+        } catch (error: any) {
+          result.errors.push(`Recent movie error: ${wikiMovie.label} — ${error.message}`);
+          logger.error('Recent movie processing failed', { movie: wikiMovie.label, error: error.message });
         }
-
-        const movie = normalizeMovie(wikiMovie);
-
-        // Dedup check
-        const existingIds = await github.getExistingMovieIds(yearRepo);
-        const pendingIds = await github.getMoviesInPendingPRs(yearRepo);
-        if (existingIds.has(movie.id) || pendingIds.has(movie.id)) {
-          continue;
-        }
-
-        if (!batch.movies.has(wikiMovie.year)) {
-          batch.movies.set(wikiMovie.year, []);
-        }
-        batch.movies.get(wikiMovie.year)!.push(movie);
-        batch.movieWikidataIds.push(wikiMovie.wikidataId);
-        titlesIngested++;
-      } catch (error: any) {
-        result.errors.push(`Recent movie error: ${wikiMovie.label} — ${error.message}`);
-        logger.error('Recent movie processing failed', { movie: wikiMovie.label, error: error.message });
       }
     }
   } catch (error: any) {
@@ -294,35 +371,44 @@ async function runRecentPass(
     const recentSeriesResults = await queryWikidata(recentSeriesQuery);
     const recentSeries = parseSeriesResults(recentSeriesResults);
 
-    for (const wikiSeries of recentSeries) {
-      if (titlesIngested >= RECENT_LIMIT) break;
-      if (wikiSeries.startYear < 1900 || wikiSeries.startYear > MAX_YEAR) continue;
+    // ─── Sanity Check: recent series result count ────────────────────────────
+    if (!isResultCountSane(recentSeries.length)) {
+      logger.error('Recent series query returned too many results — skipping', {
+        count: recentSeries.length,
+        threshold: MAX_RESULTS_SANITY,
+      });
+      result.errors.push(`Sanity check failed: recent series query returned ${recentSeries.length} results (max: ${MAX_RESULTS_SANITY})`);
+    } else {
+      for (const wikiSeries of recentSeries) {
+        if (titlesIngested >= RECENT_LIMIT) break;
+        if (wikiSeries.startYear < 1900 || wikiSeries.startYear > MAX_YEAR) continue;
 
-      try {
-        const yearRepo = `mmdb-${wikiSeries.startYear}`;
-        const repoAvailable = await github.repoExists(yearRepo);
+        try {
+          const yearRepo = `mmdb-${wikiSeries.startYear}`;
+          const repoAvailable = await github.repoExists(yearRepo);
 
-        if (!repoAvailable) {
-          logger.warn(`Repo ${yearRepo} missing, skipping recent series`, { title: wikiSeries.label });
-          continue;
+          if (!repoAvailable) {
+            logger.warn(`Repo ${yearRepo} missing, skipping recent series`, { title: wikiSeries.label });
+            continue;
+          }
+
+          const series = normalizeSeries(wikiSeries);
+
+          const existingIds = await github.getExistingSeriesIds(yearRepo);
+          const pendingIds = await github.getSeriesInPendingPRs(yearRepo);
+          if (existingIds.has(series.id) || pendingIds.has(series.id)) {
+            continue;
+          }
+
+          if (!batch.series.has(wikiSeries.startYear)) {
+            batch.series.set(wikiSeries.startYear, []);
+          }
+          batch.series.get(wikiSeries.startYear)!.push(series);
+          titlesIngested++;
+        } catch (error: any) {
+          result.errors.push(`Recent series error: ${wikiSeries.label} — ${error.message}`);
+          logger.error('Recent series processing failed', { series: wikiSeries.label, error: error.message });
         }
-
-        const series = normalizeSeries(wikiSeries);
-
-        const existingIds = await github.getExistingSeriesIds(yearRepo);
-        const pendingIds = await github.getSeriesInPendingPRs(yearRepo);
-        if (existingIds.has(series.id) || pendingIds.has(series.id)) {
-          continue;
-        }
-
-        if (!batch.series.has(wikiSeries.startYear)) {
-          batch.series.set(wikiSeries.startYear, []);
-        }
-        batch.series.get(wikiSeries.startYear)!.push(series);
-        titlesIngested++;
-      } catch (error: any) {
-        result.errors.push(`Recent series error: ${wikiSeries.label} — ${error.message}`);
-        logger.error('Recent series processing failed', { series: wikiSeries.label, error: error.message });
       }
     }
   } catch (error: any) {

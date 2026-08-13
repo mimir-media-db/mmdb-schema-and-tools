@@ -37,3 +37,12 @@ export const MAX_YEAR = new Date().getFullYear();
 
 /** Branch name prefix for ingestion PRs */
 export const BRANCH_PREFIX = 'mmdb-ingest';
+
+/** Lock timeout in milliseconds — stale locks older than this are broken (10 min) */
+export const LOCK_TIMEOUT_MS = 600_000;
+
+/** Number of consecutive empty runs before auto-pausing ingestion */
+export const MAX_EMPTY_RUNS = 3;
+
+/** Maximum results from a single Wikidata query before we consider it garbage */
+export const MAX_RESULTS_SANITY = 2000;

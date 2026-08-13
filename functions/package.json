@@ -16,7 +16,9 @@
     "ingest:dry": "node scripts/ingest-dry.mjs",
     "ingest:now": "node scripts/ingest-now.mjs",
     "logs": "firebase functions:log",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-vm-modules --env-file=.env.test --test dist/test/**/*.test.js",
+    "test:build": "tsc -p tsconfig.test.json && yarn test"
   },
   "engines": {
     "node": "22"
