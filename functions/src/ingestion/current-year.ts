@@ -40,7 +40,7 @@ export function shouldResetCurrentYearState(stateYear: number, actualYear: numbe
   return stateYear !== actualYear;
 }
 
-export async function runCurrentYearIngestion(githubToken: string, dryRun: boolean = false): Promise<IngestionResult> {
+export async function runCurrentYearIngestion(dryRun: boolean = false): Promise<IngestionResult> {
   const result: IngestionResult = {
     moviesIngested: 0,
     seriesIngested: 0,
@@ -70,7 +70,7 @@ export async function runCurrentYearIngestion(githubToken: string, dryRun: boole
   }
 
   try {
-    const github = new GitHubClient(githubToken);
+    const github = new GitHubClient();
     const currentYear = new Date().getFullYear();
     const yearRepo = `mmdb-${currentYear}`;
     const runDate = new Date().toISOString().split('T')[0];
@@ -115,7 +115,7 @@ export async function runCurrentYearIngestion(githubToken: string, dryRun: boole
         return result;
       }
 
-      const creationResult = await createYearRepo(github.getOctokit(), currentYear, dryRun);
+      const creationResult = await createYearRepo(currentYear, dryRun);
       if (!creationResult.created) {
         logger.warn(`Could not create ${yearRepo}: ${creationResult.reason}`);
         result.errors.push(`Could not create ${yearRepo}: ${creationResult.reason}`);

@@ -45,14 +45,7 @@ export const mmdbIngest = onSchedule(
     });
 
     try {
-      const token = process.env.GITHUB_TOKEN;
-
-      if (!token) {
-        logger.error('GITHUB_TOKEN environment variable is not set');
-        throw new Error('GITHUB_TOKEN environment variable is not configured');
-      }
-
-      const result = await runIngestion(token, DRY_RUN);
+      const result = await runIngestion(DRY_RUN);
 
       const durationMs = Date.now() - startTime;
       logger.info('MMDB ingestion completed', {
@@ -129,16 +122,9 @@ export const mmdbIngestManual = onRequest(
     logger.info('MMDB manual ingestion triggered', { dryRun, mode: mode || 'backlog' });
 
     try {
-      const token = process.env.GITHUB_TOKEN;
-
-      if (!token) {
-        res.status(500).json({ error: 'GITHUB_TOKEN environment variable is not configured' });
-        return;
-      }
-
       const result = mode === 'currentYear'
-        ? await runCurrentYearIngestion(token, dryRun)
-        : await runIngestion(token, dryRun);
+        ? await runCurrentYearIngestion(dryRun)
+        : await runIngestion(dryRun);
 
       const durationMs = Date.now() - startTime;
 
@@ -195,14 +181,7 @@ export const mmdbIngestCurrentYear = onSchedule(
     });
 
     try {
-      const token = process.env.GITHUB_TOKEN;
-
-      if (!token) {
-        logger.error('GITHUB_TOKEN environment variable is not set');
-        throw new Error('GITHUB_TOKEN environment variable is not configured');
-      }
-
-      const result = await runCurrentYearIngestion(token, DRY_RUN);
+      const result = await runCurrentYearIngestion(DRY_RUN);
 
       const durationMs = Date.now() - startTime;
       logger.info('MMDB current-year ingestion completed', {

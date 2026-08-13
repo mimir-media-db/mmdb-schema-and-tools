@@ -6,6 +6,7 @@
 import { Octokit } from '@octokit/rest';
 import { logger } from 'firebase-functions/v2';
 import { GITHUB_ORG, MIN_YEAR } from '../config.js';
+import { createOctokit } from './auth.js';
 
 const MAX_YEAR_REPO = new Date().getFullYear();
 
@@ -155,7 +156,6 @@ export function validateYearForRepoCreation(year: number): YearValidationResult 
 // ─── Main creation function ───────────────────────────────────────────────────
 
 export async function createYearRepo(
-  octokit: Octokit,
   year: number,
   dryRun: boolean = false
 ): Promise<RepoCreationResult> {
@@ -166,6 +166,8 @@ export async function createYearRepo(
   if (!validation.valid) {
     return { created: false, reason: validation.reason };
   }
+
+  const octokit = createOctokit();
 
   // Safeguard 3: Existence check
   try {

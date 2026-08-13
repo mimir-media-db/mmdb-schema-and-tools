@@ -9,18 +9,15 @@ import { logger } from 'firebase-functions/v2';
 import { MMDBMovie, MMDBPerson, MMDBSeries } from './normalizer.js';
 import { GITHUB_ORG } from '../config.js';
 import { getMovieFilePath, getSeriesFilePath, getPersonFilePath, serializeEntity } from './github-helpers.js';
+import { createOctokit } from './auth.js';
 
 export class GitHubClient {
   private octokit: Octokit;
   private owner: string;
 
-  constructor(token: string, owner: string = GITHUB_ORG) {
-    this.octokit = new Octokit({ auth: token });
+  constructor(owner: string = GITHUB_ORG) {
+    this.octokit = createOctokit();
     this.owner = owner;
-  }
-
-  getOctokit(): Octokit {
-    return this.octokit;
   }
 
   async repoExists(repo: string): Promise<boolean> {

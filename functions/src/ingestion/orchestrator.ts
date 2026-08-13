@@ -55,7 +55,7 @@ interface TitleBatch {
   movieWikidataIds: string[];
 }
 
-export async function runIngestion(githubToken: string, dryRun: boolean = false): Promise<IngestionResult> {
+export async function runIngestion(dryRun: boolean = false): Promise<IngestionResult> {
   const result: IngestionResult = {
     moviesIngested: 0,
     seriesIngested: 0,
@@ -85,7 +85,7 @@ export async function runIngestion(githubToken: string, dryRun: boolean = false)
   }
 
   try {
-    const github = new GitHubClient(githubToken);
+    const github = new GitHubClient();
     const runDate = new Date().toISOString().split('T')[0];
     const branchSuffix = runDate.replace(/-/g, '');
 
@@ -221,7 +221,7 @@ async function runBacklogPass(
         return batch;
       }
 
-      const creationResult = await createYearRepo(github.getOctokit(), currentYear, dryRun);
+      const creationResult = await createYearRepo(currentYear, dryRun);
       if (!creationResult.created) {
         logger.warn(`Could not create ${yearRepo}: ${creationResult.reason}`);
         await advanceBacklog(0, true, currentYear);
@@ -379,7 +379,7 @@ async function runBackwardPass(
         return batch;
       }
 
-      const creationResult = await createYearRepo(github.getOctokit(), currentYear, dryRun);
+      const creationResult = await createYearRepo(currentYear, dryRun);
       if (!creationResult.created) {
         logger.warn(`Could not create ${yearRepo}: ${creationResult.reason}`);
         await advanceBackwardBacklog(0, true, currentYear);

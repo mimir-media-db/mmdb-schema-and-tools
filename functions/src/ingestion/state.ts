@@ -8,6 +8,7 @@ import { logger } from 'firebase-functions/v2';
 import { Octokit } from '@octokit/rest';
 import { GITHUB_ORG, DEFAULT_START_YEAR } from '../config.js';
 import { mergeStateWithDefaults, shouldAcquireLock } from './safeguards.js';
+import { createOctokit } from './auth.js';
 
 const META_REPO = 'mmdb-meta';
 const STATE_PATH = 'ingestion/state.json';
@@ -68,9 +69,7 @@ let octokit: Octokit | null = null;
 
 function getOctokit(): Octokit {
   if (!octokit) {
-    const token = process.env.GITHUB_TOKEN;
-    if (!token) throw new Error('GITHUB_TOKEN not set');
-    octokit = new Octokit({ auth: token });
+    octokit = createOctokit();
   }
   return octokit;
 }

@@ -12,19 +12,12 @@ import { runIngestion } from './ingestion/orchestrator.js';
 const args = process.argv.slice(2);
 const dryRun = !args.includes('--live');
 
-const token = process.env.GITHUB_TOKEN;
-if (!token) {
-  console.error('Error: GITHUB_TOKEN environment variable is required');
-  console.error('Set it in your .env file.');
-  process.exit(1);
-}
-
 console.log(`\n🚀 MMDB Local Ingestion`);
 console.log(`   Mode: ${dryRun ? '🧪 DRY RUN (no PRs)' : '⚡ LIVE (will create PRs)'}\n`);
 
 const start = Date.now();
 
-runIngestion(token, dryRun)
+runIngestion(dryRun)
   .then((result) => {
     const duration = Math.round((Date.now() - start) / 1000);
     console.log(`\n✅ Ingestion complete (${duration}s)`);
