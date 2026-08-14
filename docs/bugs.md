@@ -2,13 +2,35 @@
 
 > Bug tracking and issue resolution for the Mimir Media Database project.
 
-**Last Updated**: 2026-01-19
+**Last Updated**: 2026-08-14
 
 ---
 
 ## Active Issues
 
-No active issues at this time.
+### Issue #1: Duplicate file collision during ingestion (SHA not supplied)
+
+**Status**: 🟢 Minor
+
+**Reported**: 2026-08-14
+
+**Component**: Ingestion
+
+**Description**:
+When the ingestion pipeline tries to add a movie/person that already exists in the target branch, the GitHub Contents API returns `"sha" wasn't supplied`. The code assumes file creation (no SHA needed), but existing files require the current SHA for updates.
+
+**Impact**:
+- Harmless for actual duplicates (item already exists, error is cosmetic)
+- Potential silent data loss if two different items normalize to the same slug (e.g., same title, same year but different films)
+- Failed items are logged but not retried — offset advances past them
+
+**Workaround**:
+None needed for duplicates. For genuine slug collisions, manual ingestion would be required.
+
+**Future fix considerations**:
+- Add pre-commit check: query the repo for existing file before attempting create
+- Or: catch the 422 error, fetch the file SHA, and retry as an update (upsert pattern)
+- Or: add dedup lookup against the existing index before adding to PR
 
 ---
 
