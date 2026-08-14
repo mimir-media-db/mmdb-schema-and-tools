@@ -2,12 +2,12 @@
 import { readFileSync, writeFileSync, readdirSync, statSync } from 'fs';
 import { join, resolve } from 'path';
 
-interface IndexEntry {
+export interface IndexEntry {
   id: string;
   [key: string]: any;
 }
 
-function buildMovieIndex(moviesPath: string): IndexEntry[] {
+export function buildMovieIndex(moviesPath: string): IndexEntry[] {
   const index: IndexEntry[] = [];
   const files = readdirSync(moviesPath);
   
@@ -30,25 +30,37 @@ function buildMovieIndex(moviesPath: string): IndexEntry[] {
   return index.sort((a, b) => a.id.localeCompare(b.id));
 }
 
-function buildSeriesIndex(seriesPath: string): IndexEntry[] {
+export function buildSeriesIndex(seriesPath: string): IndexEntry[] {
   const index: IndexEntry[] = [];
-  const dirs = readdirSync(seriesPath);
+  const entries = readdirSync(seriesPath);
   
-  for (const dir of dirs) {
-    const dirPath = join(seriesPath, dir);
-    const stat = statSync(dirPath);
+  for (const entry of entries) {
+    if (entry === 'index.json') continue;
     
-    if (stat.isDirectory()) {
-      const metaPath = join(dirPath, 'meta.json');
+    const entryPath = join(seriesPath, entry);
+    const stat = statSync(entryPath);
+    
+    if (stat.isFile() && entry.endsWith('.json')) {
+      // Flat file format: data/series/name.json
+      const content = JSON.parse(readFileSync(entryPath, 'utf-8'));
+      index.push({
+        id: content.id,
+        title: content.title,
+        start_year: content.start_year,
+        end_year: content.end_year,
+        path: `data/series/${entry}`
+      });
+    } else if (stat.isDirectory()) {
+      // Directory format: data/series/name/meta.json (legacy)
+      const metaPath = join(entryPath, 'meta.json');
       try {
         const content = JSON.parse(readFileSync(metaPath, 'utf-8'));
-        
         index.push({
           id: content.id,
           title: content.title,
           start_year: content.start_year,
           end_year: content.end_year,
-          path: `data/series/${dir}/meta.json`
+          path: `data/series/${entry}/meta.json`
         });
       } catch {
         // Skip if meta.json doesn't exist
@@ -59,7 +71,7 @@ function buildSeriesIndex(seriesPath: string): IndexEntry[] {
   return index.sort((a, b) => a.id.localeCompare(b.id));
 }
 
-function buildPeopleIndex(peoplePath: string): IndexEntry[] {
+export function buildPeopleIndex(peoplePath: string): IndexEntry[] {
   const index: IndexEntry[] = [];
   const files = readdirSync(peoplePath);
   
@@ -113,4 +125,9 @@ function main() {
   console.log('✓ Index building complete');
 }
 
-main();
+// Run main only when executed directly
+const isMainModule = process.argv[1]?.endsWith('build-indexes.js') ||
+                     process.argv[1]?.endsWith('build-indexes.ts');
+if (isMainModule) {
+  main();
+}

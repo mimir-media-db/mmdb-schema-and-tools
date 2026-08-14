@@ -4,9 +4,45 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { validateYearForRepoCreation } from '../../src/ingestion/repo-creator.js';
+import { validateYearForRepoCreation, VALIDATE_WORKFLOW } from '../../src/ingestion/repo-creator.js';
 
 describe('Repo Creator', () => {
+  describe('VALIDATE_WORKFLOW template', () => {
+    it('should include permissions: contents: write', () => {
+      assert.ok(
+        VALIDATE_WORKFLOW.includes('permissions:'),
+        'Workflow must include a permissions block'
+      );
+      assert.ok(
+        VALIDATE_WORKFLOW.includes('contents: write'),
+        'Workflow must grant contents: write permission'
+      );
+    });
+
+    it('should have permissions before jobs block', () => {
+      const permIndex = VALIDATE_WORKFLOW.indexOf('permissions:');
+      const jobsIndex = VALIDATE_WORKFLOW.indexOf('jobs:');
+      assert.ok(
+        permIndex < jobsIndex,
+        'permissions block must appear before jobs block'
+      );
+    });
+
+    it('should skip runs for github-actions[bot]', () => {
+      assert.ok(
+        VALIDATE_WORKFLOW.includes("github.actor != 'github-actions[bot]'"),
+        'Workflow must skip bot-triggered runs'
+      );
+    });
+
+    it('should include git push step', () => {
+      assert.ok(
+        VALIDATE_WORKFLOW.includes('git push'),
+        'Workflow must push index updates'
+      );
+    });
+  });
+
   describe('validateYearForRepoCreation', () => {
     describe('year bounds', () => {
       it('should reject year below minimum (1887)', () => {

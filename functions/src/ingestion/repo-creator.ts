@@ -15,7 +15,7 @@ const META_REPOS_PATH = 'repos.json';
 
 // ─── Full hardened CI workflow (from TASK-058) ─────────────────────────────────
 
-const VALIDATE_WORKFLOW = `name: Validate and Build Indexes
+export const VALIDATE_WORKFLOW = `name: Validate and Build Indexes
 
 on:
   pull_request:
@@ -24,6 +24,9 @@ on:
   push:
     branches: [master]
     paths: ['data/**']
+
+permissions:
+  contents: write
 
 jobs:
   validate:
