@@ -8,7 +8,7 @@ MMDB is a **distributed media database** stored as JSON files in public GitHub r
 
 - **Movies, series, and people** as structured JSON with stable IDs
 - **Sharded by year** — one repo per release year (`mmdb-2009`, `mmdb-2010`, ..., `mmdb-2026`)
-- **Automated ingestion** from Wikidata — 300+ titles/day, growing continuously
+- **Automated ingestion** from Wikidata — ~2,400 titles/day, growing continuously
 - **No API required** — clone the repos you need, query locally
 - **Open source** (MIT) — fork, consume, contribute
 
@@ -51,7 +51,7 @@ cat mmdb-2026/data/movies/index.json | jq '.[0:3]'
 - ✅ Local ingestion script (movies)
 - ✅ People ingestion (cast, directors, producers)
 - ✅ Series ingestion from Wikidata
-- ✅ Serverless ingestion pipeline (Firebase Cloud Functions, 3x daily)
+- ✅ Serverless ingestion pipeline (Firebase Cloud Functions, 6x daily)
 - ⏳ Additional year repos (2011-2025)
 - ⏳ Community contribution workflow
 
@@ -99,7 +99,7 @@ New year repos are created automatically as the ingestion pipeline advances.
 
 The pipeline runs as Firebase Cloud Functions:
 
-- **3x daily** — Backlog pass (forward from 2010→now, backward from 2009→1888)
+- **6x daily** — Backlog pass (forward from 2010→now, backward from 2009→1888)
 - **Nightly** — Current year (2026) ingestion
 - **Source** — [Wikidata](https://www.wikidata.org/) SPARQL queries
 - **Output** — Pull requests with auto-merge (squash)

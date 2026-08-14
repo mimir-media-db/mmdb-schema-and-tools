@@ -20,7 +20,7 @@ const DRY_RUN = process.env.MMDB_DRY_RUN === 'true';
 /**
  * Scheduled MMDB ingestion function.
  *
- * Runs every 8 hours (3x daily) during initial backlog fill.
+ * Runs every 4 hours (6x daily) during initial backlog fill.
  * Change SCHEDULE_CRON to 'every 24 hours' once backlog is complete.
  */
 export const mmdbIngest = onSchedule(

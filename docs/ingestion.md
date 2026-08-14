@@ -104,7 +104,7 @@ npm run ingest-people -- --limit=10
 - **No timeouts**: Focused queries complete in <2 seconds
 - **Comprehensive**: Includes actors, directors, and producers
 - **English labels**: Filters for entities with English names
-- **Rate limiting**: 1-second delay between batch queries
+- **Rate limiting**: 500ms delay between batch queries
 
 ### Example
 

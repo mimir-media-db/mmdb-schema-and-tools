@@ -43,17 +43,17 @@ describe('Backward Backlog', () => {
       assert.strictEqual(MIN_BACKLOG_YEAR, 1888);
     });
 
-    it('should split backlog budget evenly (30 forward + 30 backward = 60)', () => {
-      assert.strictEqual(FORWARD_BACKLOG_LIMIT, 30);
-      assert.strictEqual(BACKWARD_BACKLOG_LIMIT, 30);
+    it('should split backlog budget evenly (100 forward + 100 backward = 200)', () => {
+      assert.strictEqual(FORWARD_BACKLOG_LIMIT, 100);
+      assert.strictEqual(BACKWARD_BACKLOG_LIMIT, 100);
       assert.strictEqual(FORWARD_BACKLOG_LIMIT + BACKWARD_BACKLOG_LIMIT, BACKLOG_LIMIT);
     });
 
     it('should use 70/30 split for movies/series in backward pass', () => {
       const moviesLimit = Math.floor(BACKWARD_BACKLOG_LIMIT * 0.7);
       const seriesLimit = BACKWARD_BACKLOG_LIMIT - moviesLimit;
-      assert.strictEqual(moviesLimit, 21);
-      assert.strictEqual(seriesLimit, 9);
+      assert.strictEqual(moviesLimit, 70);
+      assert.strictEqual(seriesLimit, 30);
     });
   });
 
@@ -202,14 +202,14 @@ describe('Backward Backlog', () => {
       const moviesLimit = Math.floor(BACKWARD_BACKLOG_LIMIT * 0.7);
       const initialOffset = 0;
       const newOffset = initialOffset + moviesLimit;
-      assert.strictEqual(newOffset, 21);
+      assert.strictEqual(newOffset, 70);
     });
 
     it('should accumulate offset across runs', () => {
       const moviesLimit = Math.floor(BACKWARD_BACKLOG_LIMIT * 0.7);
-      const initialOffset = 21;
+      const initialOffset = 70;
       const newOffset = initialOffset + moviesLimit;
-      assert.strictEqual(newOffset, 42);
+      assert.strictEqual(newOffset, 140);
     });
 
     it('should reset offset to 0 when year exhausted', () => {

@@ -38,6 +38,7 @@ import {
 } from '../config.js';
 import { shouldAutoPause, isResultCountSane } from './safeguards.js';
 import { createYearRepo } from './repo-creator.js';
+import { RunTimer } from './run-timer.js';
 
 export interface IngestionResult {
   moviesIngested: number;
@@ -47,6 +48,7 @@ export interface IngestionResult {
   errors: string[];
   autoPaused?: boolean;
   lockBlocked?: boolean;
+  timedOut?: boolean;
 }
 
 interface TitleBatch {
@@ -88,6 +90,7 @@ export async function runIngestion(dryRun: boolean = false): Promise<IngestionRe
     const github = new GitHubClient();
     const runDate = new Date().toISOString().split('T')[0];
     const branchSuffix = runDate.replace(/-/g, '');
+    const timer = new RunTimer();
 
     // Reset per-run repo creation counter
     await updateState({ repos_created_this_run: 0 });
@@ -102,11 +105,47 @@ export async function runIngestion(dryRun: boolean = false): Promise<IngestionRe
     // Forward pass (2010 → current year)
     const forwardTitles = await runBacklogPass(github, state.backlog_current_year, state.backlog_offset, result, dryRun);
 
+    // ─── Timeout Check ───────────────────────────────────────────────────────
+    if (timer.isExpired()) {
+      logger.warn('Run timeout reached after forward pass, stopping gracefully', {
+        elapsed: timer.elapsed(),
+      });
+      result.timedOut = true;
+      return result;
+    }
+
     // Backward pass (2009 → 1888)
     const backwardTitles = await runBackwardPass(github, state.backward_year, state.backward_offset, result, dryRun);
 
+    // ─── Timeout Check ───────────────────────────────────────────────────────
+    if (timer.isExpired()) {
+      logger.warn('Run timeout reached after backward pass, stopping gracefully', {
+        elapsed: timer.elapsed(),
+      });
+      result.timedOut = true;
+      // Still create PRs for what we have so far
+      if (!dryRun) {
+        const partialTitles = mergeBatches(forwardTitles, backwardTitles);
+        await createTitlePRs(github, partialTitles, branchSuffix, result);
+      }
+      return result;
+    }
+
     // ─── Pass 2: Recent ──────────────────────────────────────────────────────
     const recentTitles = await runRecentPass(github, state.last_recent_timestamp, result);
+
+    // ─── Timeout Check ───────────────────────────────────────────────────────
+    if (timer.isExpired()) {
+      logger.warn('Run timeout reached after recent pass, stopping gracefully', {
+        elapsed: timer.elapsed(),
+      });
+      result.timedOut = true;
+      if (!dryRun) {
+        const partialTitles = mergeBatches(mergeBatches(forwardTitles, backwardTitles), recentTitles);
+        await createTitlePRs(github, partialTitles, branchSuffix, result);
+      }
+      return result;
+    }
 
     // ─── Merge title batches ─────────────────────────────────────────────────
     const allTitles = mergeBatches(mergeBatches(forwardTitles, backwardTitles), recentTitles);
@@ -125,8 +164,14 @@ export async function runIngestion(dryRun: boolean = false): Promise<IngestionRe
       ...recentTitles.movieWikidataIds,
     ];
 
-    if (allWikidataIds.length > 0) {
+    if (allWikidataIds.length > 0 && !timer.isExpired()) {
       await runPeoplePass(github, allWikidataIds, branchSuffix, dryRun, result);
+    } else if (timer.isExpired()) {
+      logger.warn('Run timeout reached before people pass, skipping', {
+        elapsed: timer.elapsed(),
+        skippedPeopleIds: allWikidataIds.length,
+      });
+      result.timedOut = true;
     }
 
     // ─── Update state ────────────────────────────────────────────────────────

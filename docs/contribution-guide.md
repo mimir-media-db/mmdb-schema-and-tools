@@ -8,7 +8,7 @@
 
 Thank you for your interest in contributing to MMDB! This guide covers how to add or improve data in the database.
 
-**Note**: Automated ingestion from Wikidata runs via Firebase Cloud Functions (3x daily). You don't need to run ingestion manually — contributions focus on data corrections, additions the pipeline missed, and tooling improvements.
+**Note**: Automated ingestion from Wikidata runs via Firebase Cloud Functions (6x daily). You don't need to run ingestion manually — contributions focus on data corrections, additions the pipeline missed, and tooling improvements.
 
 ## Before You Start
 
@@ -195,7 +195,7 @@ Then open a PR on GitHub with:
 
 The MMDB ingestion pipeline runs automatically via Firebase Cloud Functions:
 
-- **3x daily**: Processes the backlog of Wikidata entries (movies, series, people)
+- **6x daily**: Processes the backlog of Wikidata entries (movies, series, people)
 - **Nightly**: Ingests new releases for the current year
 - **Auto-merge**: Bot PRs are squash-merged automatically after CI passes
 

@@ -6,7 +6,7 @@ Automated serverless pipeline that ingests movie, series, and people metadata fr
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    Cloud Scheduler (every 8h)                     │
+│                    Cloud Scheduler (every 4h)                     │
 └──────────────────────────────┬──────────────────────────────────┘
                                │ triggers
                                ▼
@@ -15,7 +15,7 @@ Automated serverless pipeline that ingests movie, series, and people metadata fr
 │                                                                   │
 │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────┐  │
 │  │  Backlog Pass     │  │  Recent Pass      │  │ People Pass   │  │
-│  │  (60 titles/run)  │  │  (40 titles/run)  │  │ (uncapped)    │  │
+│  │  (200 titles/run) │  │  (40 titles/run)  │  │ (uncapped)    │  │
 │  │  Year-by-year     │  │  Modified since   │  │ From new      │  │
 │  │  sequential       │  │  last run         │  │ movies        │  │
 │  └────────┬─────────┘  └────────┬─────────┘  └──────┬───────┘  │
@@ -138,7 +138,7 @@ yarn ingest:local:live      # creates PRs
 
 ### Schedule
 
-The default schedule is `every 8 hours` (3 times daily) for faster backlog processing. Once the backlog is complete, change to `every 24 hours` in `src/config.ts`:
+The default schedule is `every 4 hours` (6 times daily) for faster backlog processing. Once the backlog is complete, change to `every 24 hours` in `src/config.ts`:
 
 ```typescript
 export const SCHEDULE_CRON = 'every 24 hours';
@@ -155,9 +155,9 @@ firebase functions:config:set mmdb.dry_run=true
 
 ### Daily Caps
 
-- **Backlog pass**: 60 titles (42 movies, 18 series)
+- **Backlog pass**: 200 titles (140 movies, 60 series)
 - **Recent pass**: 40 titles (28 movies, 12 series)
-- **Total cap**: 100 titles per run
+- **Total cap**: 200 titles per run
 - **People**: Uncapped (limited by associated movies)
 
 ### State Management
@@ -182,7 +182,7 @@ This function operates well within Firebase's free tier:
 
 | Resource | Free Tier | Expected Usage |
 |----------|-----------|----------------|
-| Cloud Functions invocations | 2M/month | ~90/month (3/day) |
+| Cloud Functions invocations | 2M/month | ~180/month (6/day) |
 | Cloud Functions compute | 400K GB-sec | ~45 GB-sec/month |
 | Cloud Scheduler jobs | 3 free | 1 job |
 | Outbound networking | 5GB/month | ~10MB/month |
