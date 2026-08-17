@@ -532,26 +532,38 @@ export async function rescanYear(options) {
 
   // Add movies in batches by first letter
   if (newMovies.length > 0) {
+    log(`Adding ${newMovies.length} movies in batches...`);
     const movieGroups = groupByFirstLetter(newMovies);
+    let movieCount = 0;
     for (const [letter, group] of movieGroups) {
       const files = group.map(movie => ({
         path: getMovieFilePath(movie),
         content: JSON.stringify(movie, null, 2) + '\n',
       }));
       await commitBatch(ghApi, repo, branchName, files, `ingest: add ${group.length} movies (${letter})`);
+      movieCount += group.length;
+      process.stdout.write(`[${letter}:${group.length}] `);
     }
+    process.stdout.write('\n');
+    log(`Added ${movieCount} movies in ${movieGroups.size} commits`);
   }
 
   // Add series in batches by first letter
   if (newSeries.length > 0) {
+    log(`Adding ${newSeries.length} series in batches...`);
     const seriesGroups = groupByFirstLetter(newSeries);
+    let seriesCount = 0;
     for (const [letter, group] of seriesGroups) {
       const files = group.map(s => ({
         path: getSeriesFilePath(s),
         content: JSON.stringify(s, null, 2) + '\n',
       }));
       await commitBatch(ghApi, repo, branchName, files, `ingest: add ${group.length} series (${letter})`);
+      seriesCount += group.length;
+      process.stdout.write(`[${letter}:${group.length}] `);
     }
+    process.stdout.write('\n');
+    log(`Added ${seriesCount} series in ${seriesGroups.size} commits`);
   }
 
   // ─── Create PR ─────────────────────────────────────────────────────────────
