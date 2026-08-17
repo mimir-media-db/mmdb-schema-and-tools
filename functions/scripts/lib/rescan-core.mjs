@@ -796,12 +796,15 @@ jobs:
       }
     } catch { /* file doesn't exist yet */ }
 
-    await ghApi('PUT', `/repos/${ORG}/${repoName}/contents/${file.path}`, {
+    const { ok: putOk, data: putData } = await ghApi('PUT', `/repos/${ORG}/${repoName}/contents/${file.path}`, {
       message: `chore: initialize ${file.path}`,
       content: Buffer.from(file.content).toString('base64'),
       branch: 'master',
       ...(sha && { sha }),
     });
+    if (!putOk) {
+      console.warn(`  ⚠ Failed to push ${file.path}: ${putData.message || JSON.stringify(putData)}`);
+    }
     await new Promise(r => setTimeout(r, GITHUB_RATE_LIMIT_MS));
   }
 
