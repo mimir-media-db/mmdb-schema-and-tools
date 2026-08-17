@@ -759,7 +759,7 @@ jobs:
         if: steps.check_changes.outputs.changed == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         run: |
           cd data
-          git add data/movies/index.json data/series/index.json data/people/index.json 2>/dev/null || true
+          git add data/*/index.json 2>/dev/null || true
           STAGED=$(git diff --cached --name-only)
           for f in $STAGED; do
             if [[ ! "$f" == *index.json ]]; then
