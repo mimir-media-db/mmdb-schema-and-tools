@@ -616,7 +616,7 @@ const prBody = [
   `|--------|-------|`,
   `| Films found in Wikidata | ${rawMovies.length} |`,
   includeSeries ? `| Series found in Wikidata | ${rawSeries.length} |` : null,
-  `| Q-ID entries rejected | ${qidMovies.length + qidSeries.length} |`,
+  `| Q-ID entries rejected | ${unusableMovies.length + qidSeries.length} |`,
   `| Already stored | ${duplicateMovieCount.value + duplicateSeriesCount} |`,
   `| New movies added | ${newMovies.length} |`,
   includeSeries ? `| New series added | ${newSeries.length} |` : null,
