@@ -666,22 +666,84 @@ export async function createYearRepo(ghApi, year) {
     },
   };
 
-  const validateWorkflow = `name: Validate
+  const validateWorkflow = `name: Validate and Build Indexes
 
 on:
   pull_request:
     branches: [master]
+    paths: ['data/**']
+  push:
+    branches: [master]
+    paths: ['data/**']
+
+permissions:
+  contents: write
 
 jobs:
   validate:
     runs-on: ubuntu-latest
+    if: github.actor != 'github-actions[bot]'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout data repo
+        uses: actions/checkout@v4
         with:
-          node-version: '20'
-      - run: npm install
-      - run: npx mmdb-validate .
+          path: data
+
+      - name: Checkout tools repo
+        uses: actions/checkout@v4
+        with:
+          repository: mimir-media-db/mmdb-schema-and-tools
+          ref: master
+          path: tools
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build tools
+        run: |
+          cd tools
+          npm install
+          npm run build
+
+      - name: Validate data
+        run: |
+          cd data
+          node ../tools/dist/validate-repo.js
+
+      - name: Build indexes
+        run: |
+          cd data
+          node ../tools/dist/build-indexes.js
+
+      - name: Check for index changes
+        id: check_changes
+        run: |
+          cd data
+          git diff --exit-code data/*/index.json || echo "changed=true" >> $GITHUB_OUTPUT
+
+      - name: Verify only index files changed
+        if: steps.check_changes.outputs.changed == 'true' && github.event_name == 'push'
+        run: |
+          cd data
+          git add data/movies/index.json data/series/index.json data/people/index.json 2>/dev/null || true
+          STAGED=$(git diff --cached --name-only)
+          for f in $STAGED; do
+            if [[ ! "$f" == *index.json ]]; then
+              echo "ERROR: Unexpected file staged: $f"
+              exit 1
+            fi
+          done
+
+      - name: Commit index updates
+        if: steps.check_changes.outputs.changed == 'true' && github.event_name == 'push'
+        run: |
+          cd data
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: update indexes [skip ci]" || echo "Nothing to commit"
+          git push
 `;
 
   const files = [
