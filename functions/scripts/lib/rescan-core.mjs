@@ -712,6 +712,12 @@ jobs:
   });
   await new Promise(r => setTimeout(r, GITHUB_RATE_LIMIT_MS));
 
+  // Set default branch to master (GitHub defaults to 'main')
+  await ghApi('PATCH', `/repos/${ORG}/${repoName}`, {
+    default_branch: 'master',
+  });
+  await new Promise(r => setTimeout(r, 2000));
+
   // 4. Set up branch protection
   await ghApi('PUT', `/repos/${ORG}/${repoName}/branches/master/protection`, {
     required_status_checks: {
