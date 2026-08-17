@@ -152,6 +152,73 @@ async function createPR(title, head, body) {
   });
 }
 
+// ─── Batch Delete (Git Trees API) ────────────────────────────────────────────
+
+const MAX_TREE_BATCH_SIZE = 400;
+
+/**
+ * Delete a batch of files in a single commit using the Git Trees API.
+ */
+async function deleteBatchCommit(branch, paths, message) {
+  if (paths.length === 0) return;
+
+  // Sub-batch if too large
+  if (paths.length > MAX_TREE_BATCH_SIZE) {
+    const subBatches = [];
+    for (let i = 0; i < paths.length; i += MAX_TREE_BATCH_SIZE) {
+      subBatches.push(paths.slice(i, i + MAX_TREE_BATCH_SIZE));
+    }
+    for (let i = 0; i < subBatches.length; i++) {
+      const batchMsg = subBatches.length > 1 ? `${message} (${i + 1}/${subBatches.length})` : message;
+      await deleteBatchInternal(branch, subBatches[i], batchMsg);
+      if (i < subBatches.length - 1) await new Promise(r => setTimeout(r, 200));
+    }
+    return;
+  }
+
+  await deleteBatchInternal(branch, paths, message);
+}
+
+async function deleteBatchInternal(branch, paths, message) {
+  // 1. Get branch ref → commit SHA
+  const { data: refData } = await api('GET', `/repos/${ORG}/${repo}/git/ref/heads/${branch}`);
+  const commitSha = refData.object.sha;
+  await new Promise(r => setTimeout(r, 200));
+
+  // 2. Get commit → tree SHA
+  const { data: commitData } = await api('GET', `/repos/${ORG}/${repo}/git/commits/${commitSha}`);
+  const baseTreeSha = commitData.tree.sha;
+  await new Promise(r => setTimeout(r, 200));
+
+  // 3. Create tree with deletions (sha: null)
+  const tree = paths.map(p => ({
+    path: p,
+    mode: '100644',
+    type: 'blob',
+    sha: null,
+  }));
+
+  const { data: treeData } = await api('POST', `/repos/${ORG}/${repo}/git/trees`, {
+    base_tree: baseTreeSha,
+    tree,
+  });
+  await new Promise(r => setTimeout(r, 200));
+
+  // 4. Create commit
+  const { data: newCommit } = await api('POST', `/repos/${ORG}/${repo}/git/commits`, {
+    message,
+    tree: treeData.sha,
+    parents: [commitSha],
+  });
+  await new Promise(r => setTimeout(r, 200));
+
+  // 5. Update branch ref
+  await api('PATCH', `/repos/${ORG}/${repo}/git/refs/heads/${branch}`, {
+    sha: newCommit.sha,
+  });
+  await new Promise(r => setTimeout(r, 200));
+}
+
 // ─── Main cleanup logic ─────────────────────────────────────────────────────
 
 console.log(`\nMMDB Q-ID Cleanup${dryRun ? ' (DRY RUN)' : ''}`);
@@ -234,20 +301,16 @@ if (!branchOk) {
   process.exit(1);
 }
 
-console.log(`Deleting ${toDelete.length} files...`);
-let deleted = 0;
-for (const entry of toDelete) {
-  const { ok } = await deleteFile(entry.path, entry.sha, branchName, `cleanup: remove Q-ID entry ${entry.title}`);
-  if (ok) {
-    deleted++;
-    process.stdout.write('.');
-  } else {
-    console.warn(`\n  Warning: failed to delete ${entry.path}`);
-  }
-  // Small delay to avoid rate limiting
-  await new Promise(r => setTimeout(r, 200));
+console.log(`Deleting ${toDelete.length} files in batch...`);
+const pathsToDelete = toDelete.map(e => e.path);
+try {
+  await deleteBatchCommit(branchName, pathsToDelete, `cleanup: remove ${toDelete.length} unusable entries`);
+  console.log(`Deleted ${toDelete.length} files in ${Math.ceil(toDelete.length / MAX_TREE_BATCH_SIZE)} commit(s).`);
+} catch (err) {
+  console.error(`Batch delete failed: ${err.message}`);
+  process.exit(1);
 }
-console.log(`\nDeleted ${deleted}/${toDelete.length} files.`);
+const deleted = toDelete.length;
 
 if (deleted > 0) {
   console.log('Creating pull request...');

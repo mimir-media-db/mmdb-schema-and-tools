@@ -8,7 +8,8 @@
  */
 
 import { logger } from 'firebase-functions/v2';
-import { GitHubClient } from './github-client.js';
+import { GitHubClient, groupByFirstLetter } from './github-client.js';
+import { getMovieFilePath, getSeriesFilePath, getPersonFilePath, serializeEntity } from './github-helpers.js';
 import {
   buildMovieQuery,
   buildSeriesQuery,
@@ -333,23 +334,29 @@ export async function runCurrentYearIngestion(dryRun: boolean = false): Promise<
           await github.createBranch(yearRepo, branchName);
         }
 
-        for (const movie of movies) {
+        // Batch movies by first letter
+        const movieGroups = groupByFirstLetter(movies);
+        for (const [letter, group] of movieGroups) {
           try {
-            await github.addMovieToPR(yearRepo, branchName, movie);
-            result.moviesIngested++;
+            const files = group.map(m => ({ path: getMovieFilePath(m), content: serializeEntity(m) }));
+            await github.commitBatch(yearRepo, branchName, files, `ingest: add ${group.length} movies (${letter})`);
+            result.moviesIngested += group.length;
           } catch (error: any) {
-            result.errors.push(`Failed to add movie ${movie.title}: ${error.message}`);
-            logger.error('Failed to add movie to PR', { movie: movie.title, error: error.message });
+            result.errors.push(`Failed to add movie batch (${letter}): ${error.message}`);
+            logger.error('Failed to add movie batch to PR', { letter, count: group.length, error: error.message });
           }
         }
 
-        for (const seriesItem of series) {
+        // Batch series by first letter
+        const seriesGroups = groupByFirstLetter(series);
+        for (const [letter, group] of seriesGroups) {
           try {
-            await github.addSeriesToPR(yearRepo, branchName, seriesItem);
-            result.seriesIngested++;
+            const files = group.map(s => ({ path: getSeriesFilePath(s), content: serializeEntity(s) }));
+            await github.commitBatch(yearRepo, branchName, files, `ingest: add ${group.length} series (${letter})`);
+            result.seriesIngested += group.length;
           } catch (error: any) {
-            result.errors.push(`Failed to add series ${seriesItem.title}: ${error.message}`);
-            logger.error('Failed to add series to PR', { series: seriesItem.title, error: error.message });
+            result.errors.push(`Failed to add series batch (${letter}): ${error.message}`);
+            logger.error('Failed to add series batch to PR', { letter, count: group.length, error: error.message });
           }
         }
 
@@ -423,13 +430,16 @@ export async function runCurrentYearIngestion(dryRun: boolean = false): Promise<
             await github.createBranch(PEOPLE_REPO, peopleBranch);
           }
 
-          for (const person of newPeople) {
+          // Batch people by first letter
+          const peopleGroups = groupByFirstLetter(newPeople);
+          for (const [letter, group] of peopleGroups) {
             try {
-              await github.addPersonToPR(PEOPLE_REPO, peopleBranch, person);
-              result.peopleIngested++;
+              const files = group.map(p => ({ path: getPersonFilePath(p), content: serializeEntity(p) }));
+              await github.commitBatch(PEOPLE_REPO, peopleBranch, files, `ingest: add ${group.length} people (${letter})`);
+              result.peopleIngested += group.length;
             } catch (error: any) {
-              result.errors.push(`Failed to add person ${person.name}: ${error.message}`);
-              logger.error('Failed to add person to PR', { person: person.name, error: error.message });
+              result.errors.push(`Failed to add people batch (${letter}): ${error.message}`);
+              logger.error('Failed to add people batch to PR', { letter, count: group.length, error: error.message });
             }
           }
 

@@ -407,6 +407,87 @@ function getSeriesFilePath(series) {
   return `data/series/${slug}.json`;
 }
 
+// ─── Batch Commit (Git Trees API) ────────────────────────────────────────────
+
+const MAX_TREE_BATCH_SIZE = 400;
+
+/**
+ * Commit a batch of files in a single commit using the Git Trees API.
+ */
+async function commitBatch(targetRepo, branch, files, message) {
+  if (files.length === 0) return;
+
+  // Sub-batch if too large
+  if (files.length > MAX_TREE_BATCH_SIZE) {
+    const subBatches = [];
+    for (let i = 0; i < files.length; i += MAX_TREE_BATCH_SIZE) {
+      subBatches.push(files.slice(i, i + MAX_TREE_BATCH_SIZE));
+    }
+    for (let i = 0; i < subBatches.length; i++) {
+      const batchMsg = subBatches.length > 1 ? `${message} (${i + 1}/${subBatches.length})` : message;
+      await commitBatchInternal(targetRepo, branch, subBatches[i], batchMsg);
+      if (i < subBatches.length - 1) await new Promise(r => setTimeout(r, 200));
+    }
+    return;
+  }
+
+  await commitBatchInternal(targetRepo, branch, files, message);
+}
+
+async function commitBatchInternal(targetRepo, branch, files, message) {
+  // 1. Get branch ref → commit SHA
+  const { data: refData } = await ghApi('GET', `/repos/${ORG}/${targetRepo}/git/ref/heads/${branch}`);
+  const commitSha = refData.object.sha;
+  await new Promise(r => setTimeout(r, 200));
+
+  // 2. Get commit → tree SHA
+  const { data: commitData } = await ghApi('GET', `/repos/${ORG}/${targetRepo}/git/commits/${commitSha}`);
+  const baseTreeSha = commitData.tree.sha;
+  await new Promise(r => setTimeout(r, 200));
+
+  // 3. Create tree with all files
+  const tree = files.map(f => ({
+    path: f.path,
+    mode: '100644',
+    type: 'blob',
+    content: f.content,
+  }));
+
+  const { data: treeData } = await ghApi('POST', `/repos/${ORG}/${targetRepo}/git/trees`, {
+    base_tree: baseTreeSha,
+    tree,
+  });
+  await new Promise(r => setTimeout(r, 200));
+
+  // 4. Create commit
+  const { data: newCommit } = await ghApi('POST', `/repos/${ORG}/${targetRepo}/git/commits`, {
+    message,
+    tree: treeData.sha,
+    parents: [commitSha],
+  });
+  await new Promise(r => setTimeout(r, 200));
+
+  // 5. Update branch ref
+  await ghApi('PATCH', `/repos/${ORG}/${targetRepo}/git/refs/heads/${branch}`, {
+    sha: newCommit.sha,
+  });
+  await new Promise(r => setTimeout(r, 200));
+}
+
+/**
+ * Group items by first letter of their slug (after stripping m_, s_ prefix).
+ */
+function groupByFirstLetter(items) {
+  const groups = new Map();
+  for (const item of items) {
+    const slug = item.id.replace(/^[msp]_/, '');
+    const letter = (slug[0] || '#').toUpperCase();
+    if (!groups.has(letter)) groups.set(letter, []);
+    groups.get(letter).push(item);
+  }
+  return groups;
+}
+
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 const repo = `mmdb-${year}`;
@@ -558,43 +639,46 @@ if (!branchOk) {
   process.exit(1);
 }
 
-// Add movies
+// Add movies in batches by first letter
 if (newMovies.length > 0) {
-  console.log(`Adding ${newMovies.length} movies to branch...`);
+  console.log(`Adding ${newMovies.length} movies in batches...`);
+  const movieGroups = groupByFirstLetter(newMovies);
   let movieCount = 0;
-  for (const movie of newMovies) {
-    const path = getMovieFilePath(movie);
-    const content = JSON.stringify(movie, null, 2) + '\n';
-    const { ok } = await createOrUpdateFile(repo, branchName, path, content, `Add ${movie.title} (${movie.year})`);
-    if (ok) {
-      movieCount++;
-      if (movieCount % 10 === 0) process.stdout.write('.');
-    } else {
-      console.warn(`\n  Warning: failed to add ${movie.title}`);
+  for (const [letter, group] of movieGroups) {
+    try {
+      const files = group.map(movie => ({
+        path: getMovieFilePath(movie),
+        content: JSON.stringify(movie, null, 2) + '\n',
+      }));
+      await commitBatch(repo, branchName, files, `ingest: add ${group.length} movies (${letter})`);
+      movieCount += group.length;
+      process.stdout.write(`[${letter}:${group.length}] `);
+    } catch (err) {
+      console.warn(`\n  Warning: batch ${letter} failed: ${err.message}`);
     }
-    // Rate limit GitHub API
-    await new Promise(r => setTimeout(r, 200));
   }
-  if (movieCount > 0) console.log('');
+  console.log(`\nAdded ${movieCount} movies in ${movieGroups.size} commits`);
 }
 
-// Add series
+// Add series in batches by first letter
 if (newSeries.length > 0) {
-  console.log(`Adding ${newSeries.length} series to branch...`);
+  console.log(`Adding ${newSeries.length} series in batches...`);
+  const seriesGroups = groupByFirstLetter(newSeries);
   let seriesCount = 0;
-  for (const s of newSeries) {
-    const path = getSeriesFilePath(s);
-    const content = JSON.stringify(s, null, 2) + '\n';
-    const { ok } = await createOrUpdateFile(repo, branchName, path, content, `Add series: ${s.title}`);
-    if (ok) {
-      seriesCount++;
-      if (seriesCount % 10 === 0) process.stdout.write('.');
-    } else {
-      console.warn(`\n  Warning: failed to add series ${s.title}`);
+  for (const [letter, group] of seriesGroups) {
+    try {
+      const files = group.map(s => ({
+        path: getSeriesFilePath(s),
+        content: JSON.stringify(s, null, 2) + '\n',
+      }));
+      await commitBatch(repo, branchName, files, `ingest: add ${group.length} series (${letter})`);
+      seriesCount += group.length;
+      process.stdout.write(`[${letter}:${group.length}] `);
+    } catch (err) {
+      console.warn(`\n  Warning: series batch ${letter} failed: ${err.message}`);
     }
-    await new Promise(r => setTimeout(r, 200));
   }
-  if (seriesCount > 0) console.log('');
+  console.log(`\nAdded ${seriesCount} series in ${seriesGroups.size} commits`);
 }
 
 // Create PR

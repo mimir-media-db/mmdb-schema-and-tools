@@ -11,6 +11,27 @@ import { GITHUB_ORG } from '../config.js';
 import { getMovieFilePath, getSeriesFilePath, getPersonFilePath, serializeEntity } from './github-helpers.js';
 import { createOctokit } from './auth.js';
 
+/** Maximum files per Git Trees API call (GitHub soft limit) */
+const MAX_TREE_BATCH_SIZE = 400;
+
+/** Delay between successive GitHub API calls in ms */
+const API_CALL_DELAY_MS = 200;
+
+/**
+ * Group items by the first letter of their slug (after stripping m_, s_, p_ prefix).
+ * Useful for batching commits alphabetically.
+ */
+export function groupByFirstLetter<T extends { id: string }>(items: T[]): Map<string, T[]> {
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const slug = item.id.replace(/^[msp]_/, '');
+    const letter = (slug[0] || '#').toUpperCase();
+    if (!groups.has(letter)) groups.set(letter, []);
+    groups.get(letter)!.push(item);
+  }
+  return groups;
+}
+
 export class GitHubClient {
   private octokit: Octokit;
   private owner: string;
@@ -18,6 +39,193 @@ export class GitHubClient {
   constructor(owner: string = GITHUB_ORG) {
     this.octokit = createOctokit();
     this.owner = owner;
+  }
+
+  /**
+   * Commit a batch of files in a single commit using the Git Trees API.
+   * If the batch exceeds MAX_TREE_BATCH_SIZE, it is split into sub-batches
+   * with one commit per sub-batch.
+   */
+  async commitBatch(
+    repo: string,
+    branch: string,
+    files: Array<{ path: string; content: string }>,
+    message: string
+  ): Promise<void> {
+    if (files.length === 0) return;
+
+    // Split into sub-batches if too large
+    if (files.length > MAX_TREE_BATCH_SIZE) {
+      const subBatches: Array<Array<{ path: string; content: string }>> = [];
+      for (let i = 0; i < files.length; i += MAX_TREE_BATCH_SIZE) {
+        subBatches.push(files.slice(i, i + MAX_TREE_BATCH_SIZE));
+      }
+      for (let i = 0; i < subBatches.length; i++) {
+        const batchMsg = subBatches.length > 1 ? `${message} (${i + 1}/${subBatches.length})` : message;
+        await this.commitBatchInternal(repo, branch, subBatches[i], batchMsg);
+        if (i < subBatches.length - 1) {
+          await this.delay(API_CALL_DELAY_MS);
+        }
+      }
+      return;
+    }
+
+    await this.commitBatchInternal(repo, branch, files, message);
+  }
+
+  /**
+   * Delete a batch of files in a single commit using the Git Trees API.
+   * Sets sha to null for each path to remove it from the tree.
+   */
+  async deleteBatch(
+    repo: string,
+    branch: string,
+    paths: string[],
+    message: string
+  ): Promise<void> {
+    if (paths.length === 0) return;
+
+    // Split into sub-batches if too large
+    if (paths.length > MAX_TREE_BATCH_SIZE) {
+      const subBatches: string[][] = [];
+      for (let i = 0; i < paths.length; i += MAX_TREE_BATCH_SIZE) {
+        subBatches.push(paths.slice(i, i + MAX_TREE_BATCH_SIZE));
+      }
+      for (let i = 0; i < subBatches.length; i++) {
+        const batchMsg = subBatches.length > 1 ? `${message} (${i + 1}/${subBatches.length})` : message;
+        await this.deleteBatchInternal(repo, branch, subBatches[i], batchMsg);
+        if (i < subBatches.length - 1) {
+          await this.delay(API_CALL_DELAY_MS);
+        }
+      }
+      return;
+    }
+
+    await this.deleteBatchInternal(repo, branch, paths, message);
+  }
+
+  private async commitBatchInternal(
+    repo: string,
+    branch: string,
+    files: Array<{ path: string; content: string }>,
+    message: string
+  ): Promise<void> {
+    // 1. Get branch ref → commit SHA
+    const { data: refData } = await this.octokit.git.getRef({
+      owner: this.owner,
+      repo,
+      ref: `heads/${branch}`,
+    });
+    const commitSha = refData.object.sha;
+    await this.delay(API_CALL_DELAY_MS);
+
+    // 2. Get commit → tree SHA
+    const { data: commitData } = await this.octokit.git.getCommit({
+      owner: this.owner,
+      repo,
+      commit_sha: commitSha,
+    });
+    const baseTreeSha = commitData.tree.sha;
+    await this.delay(API_CALL_DELAY_MS);
+
+    // 3. POST /git/trees with base_tree + all files
+    const tree = files.map(f => ({
+      path: f.path,
+      mode: '100644' as const,
+      type: 'blob' as const,
+      content: f.content,
+    }));
+
+    const { data: treeData } = await this.octokit.git.createTree({
+      owner: this.owner,
+      repo,
+      base_tree: baseTreeSha,
+      tree,
+    });
+    await this.delay(API_CALL_DELAY_MS);
+
+    // 4. POST /git/commits with new tree + parent
+    const { data: newCommit } = await this.octokit.git.createCommit({
+      owner: this.owner,
+      repo,
+      message,
+      tree: treeData.sha,
+      parents: [commitSha],
+    });
+    await this.delay(API_CALL_DELAY_MS);
+
+    // 5. PATCH /git/refs to update branch
+    await this.octokit.git.updateRef({
+      owner: this.owner,
+      repo,
+      ref: `heads/${branch}`,
+      sha: newCommit.sha,
+    });
+    await this.delay(API_CALL_DELAY_MS);
+  }
+
+  private async deleteBatchInternal(
+    repo: string,
+    branch: string,
+    paths: string[],
+    message: string
+  ): Promise<void> {
+    // 1. Get branch ref → commit SHA
+    const { data: refData } = await this.octokit.git.getRef({
+      owner: this.owner,
+      repo,
+      ref: `heads/${branch}`,
+    });
+    const commitSha = refData.object.sha;
+    await this.delay(API_CALL_DELAY_MS);
+
+    // 2. Get commit → tree SHA
+    const { data: commitData } = await this.octokit.git.getCommit({
+      owner: this.owner,
+      repo,
+      commit_sha: commitSha,
+    });
+    const baseTreeSha = commitData.tree.sha;
+    await this.delay(API_CALL_DELAY_MS);
+
+    // 3. POST /git/trees with base_tree + deletions (sha: null)
+    const tree = paths.map(p => ({
+      path: p,
+      mode: '100644' as const,
+      type: 'blob' as const,
+      sha: null,
+    }));
+
+    const { data: treeData } = await this.octokit.git.createTree({
+      owner: this.owner,
+      repo,
+      base_tree: baseTreeSha,
+      tree,
+    });
+    await this.delay(API_CALL_DELAY_MS);
+
+    // 4. POST /git/commits with new tree + parent
+    const { data: newCommit } = await this.octokit.git.createCommit({
+      owner: this.owner,
+      repo,
+      message,
+      tree: treeData.sha,
+      parents: [commitSha],
+    });
+    await this.delay(API_CALL_DELAY_MS);
+
+    // 5. PATCH /git/refs to update branch
+    await this.octokit.git.updateRef({
+      owner: this.owner,
+      repo,
+      ref: `heads/${branch}`,
+      sha: newCommit.sha,
+    });
+    await this.delay(API_CALL_DELAY_MS);
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   async repoExists(repo: string): Promise<boolean> {
