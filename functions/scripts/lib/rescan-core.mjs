@@ -65,8 +65,17 @@ export function createGitHubClient(token) {
 }
 
 export async function getDefaultBranchSha(ghApi, repo) {
-  const { data } = await ghApi('GET', `/repos/${ORG}/${repo}/git/ref/heads/master`);
-  return data.object?.sha;
+  // Retry up to 5 times with 2s delay — handles newly created repos where ref propagation is slow
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const { ok, data } = await ghApi('GET', `/repos/${ORG}/${repo}/git/ref/heads/master`);
+    if (ok && data.object?.sha) {
+      return data.object.sha;
+    }
+    if (attempt < 4) {
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+  return null;
 }
 
 export async function createBranch(ghApi, repo, branchName, sha) {
