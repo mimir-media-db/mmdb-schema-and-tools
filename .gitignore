@@ -11,5 +11,6 @@ build/
 .amazon-q-history/
 .envrc
 .ingestion-state.json
+bulk-fill-results.json
 tools/**/*.js
 tools/**/*.d.ts
