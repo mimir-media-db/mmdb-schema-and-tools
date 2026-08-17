@@ -732,6 +732,6 @@ if (autoMergeOk) {
 
 // ─── Final summary ───────────────────────────────────────────────────────────
 
-const totalRejected = qidMovies.length + qidSeries.length;
+const totalRejected = unusableMovies.length + qidSeries.length;
 const totalDuplicates = duplicateMovieCount.value + duplicateSeriesCount;
 console.log(`\nDone. ${totalNew} entries added, ${totalRejected} Q-IDs rejected, ${totalDuplicates} duplicates skipped.`);
