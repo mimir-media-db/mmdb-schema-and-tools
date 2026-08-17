@@ -622,13 +622,13 @@ export async function hasRecentRescanBranch(ghApi, repo, year) {
 export async function createYearRepo(ghApi, year) {
   const repoName = `mmdb-${year}`;
 
-  // 1. Create the repo (no auto_init — we'll create the initial commit ourselves)
+  // 1. Create the repo with auto_init (creates 'main' branch with README)
   const { ok, data } = await ghApi('POST', `/orgs/${ORG}/repos`, {
     name: repoName,
-    description: `MMDB — Movies and series released in ${year}`,
+    description: `MMDB ${year} — Movies and series from ${year}`,
     visibility: 'public',
-    auto_init: false,
-    has_issues: false,
+    auto_init: true,
+    has_issues: true,
     has_projects: false,
     has_wiki: false,
     allow_squash_merge: true,
@@ -642,10 +642,18 @@ export async function createYearRepo(ghApi, year) {
     throw new Error(`Failed to create repo ${repoName}: ${data.message || JSON.stringify(data)}`);
   }
 
-  // Wait for repo to be ready
+  // Wait for GitHub to propagate
+  await new Promise(r => setTimeout(r, 5000));
+
+  // 2. Rename default branch from 'main' to 'master'
+  await ghApi('POST', `/repos/${ORG}/${repoName}/branches/main/rename`, {
+    new_name: 'master',
+  });
+
+  // Wait for rename to propagate
   await new Promise(r => setTimeout(r, 3000));
 
-  // 2. Create initial commit with repo structure (orphan commit — no parent)
+  // 3. Push template files (one by one, getting sha for existing README)
 
   // 3. Commit the initial structure
   const packageJson = {
@@ -684,39 +692,24 @@ jobs:
     { path: '.github/workflows/validate.yml', content: validateWorkflow },
   ];
 
-  // Use tree API to commit all files at once (orphan — no base_tree)
-  const tree = files.map(f => ({
-    path: f.path,
-    mode: '100644',
-    type: 'blob',
-    content: f.content,
-  }));
+  // Push files (get sha for existing ones like README from auto_init)
+  for (const file of files) {
+    let sha;
+    try {
+      const { ok: getOk, data: getData } = await ghApi('GET', `/repos/${ORG}/${repoName}/contents/${file.path}?ref=master`);
+      if (getOk && getData.sha) {
+        sha = getData.sha;
+      }
+    } catch { /* file doesn't exist yet */ }
 
-  const { data: treeData } = await ghApi('POST', `/repos/${ORG}/${repoName}/git/trees`, {
-    tree,
-  });
-  await new Promise(r => setTimeout(r, GITHUB_RATE_LIMIT_MS));
-
-  // Create orphan commit (no parents)
-  const { data: newCommit } = await ghApi('POST', `/repos/${ORG}/${repoName}/git/commits`, {
-    message: 'chore: initialize year repo structure',
-    tree: treeData.sha,
-    parents: [],
-  });
-  await new Promise(r => setTimeout(r, GITHUB_RATE_LIMIT_MS));
-
-  // Create master branch pointing to this commit
-  await ghApi('POST', `/repos/${ORG}/${repoName}/git/refs`, {
-    ref: 'refs/heads/master',
-    sha: newCommit.sha,
-  });
-  await new Promise(r => setTimeout(r, GITHUB_RATE_LIMIT_MS));
-
-  // Set default branch to master (GitHub defaults to 'main')
-  await ghApi('PATCH', `/repos/${ORG}/${repoName}`, {
-    default_branch: 'master',
-  });
-  await new Promise(r => setTimeout(r, 2000));
+    await ghApi('PUT', `/repos/${ORG}/${repoName}/contents/${file.path}`, {
+      message: `chore: initialize ${file.path}`,
+      content: Buffer.from(file.content).toString('base64'),
+      branch: 'master',
+      ...(sha && { sha }),
+    });
+    await new Promise(r => setTimeout(r, GITHUB_RATE_LIMIT_MS));
+  }
 
   // 4. Set up branch protection
   await ghApi('PUT', `/repos/${ORG}/${repoName}/branches/master/protection`, {
