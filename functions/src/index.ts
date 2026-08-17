@@ -11,8 +11,9 @@ import { onRequest } from 'firebase-functions/v2/https';
 import { logger } from 'firebase-functions/v2';
 import { runIngestion } from './ingestion/orchestrator.js';
 import { runCurrentYearIngestion } from './ingestion/current-year.js';
+import { runCleanup } from './ingestion/cleanup.js';
 import { isIngestionPaused } from './ingestion/safeguards.js';
-import { SCHEDULE_CRON, SCHEDULE_TIMEZONE, CURRENT_YEAR_SCHEDULE } from './config.js';
+import { SCHEDULE_CRON, SCHEDULE_TIMEZONE, CURRENT_YEAR_SCHEDULE, CLEANUP_SCHEDULE } from './config.js';
 
 // Environment-based dry run flag
 const DRY_RUN = process.env.MMDB_DRY_RUN === 'true';
@@ -201,6 +202,60 @@ export const mmdbIngestCurrentYear = onSchedule(
     } catch (error: any) {
       const durationMs = Date.now() - startTime;
       logger.error('MMDB current-year ingestion failed', {
+        durationMs,
+        error: error.message,
+        stack: error.stack,
+      });
+      throw error;
+    }
+  }
+);
+
+/**
+ * Scheduled Q-ID cleanup function.
+ *
+ * Runs weekly on Sunday at 4 AM to remove entries with Wikidata Q-ID titles
+ * (no human-readable label) from year repos. Only deletes entries without
+ * external IDs (IMDb/TMDB). Entries with external IDs are logged for future
+ * re-resolution.
+ */
+export const mmdbCleanupQIds = onSchedule(
+  {
+    schedule: CLEANUP_SCHEDULE,
+    timeZone: SCHEDULE_TIMEZONE,
+    timeoutSeconds: 540,
+    memory: '256MiB',
+    retryCount: 0,
+  },
+  async () => {
+    if (isIngestionPaused()) {
+      logger.info('Ingestion is paused — skipping Q-ID cleanup');
+      return;
+    }
+
+    const startTime = Date.now();
+    logger.info('Q-ID cleanup triggered', { schedule: CLEANUP_SCHEDULE });
+
+    try {
+      const results = await runCleanup(DRY_RUN);
+
+      const durationMs = Date.now() - startTime;
+      const totalDeleted = results.reduce((sum, r) => sum + r.deleted, 0);
+      const totalScanned = results.reduce((sum, r) => sum + r.scanned, 0);
+      const totalErrors = results.reduce((sum, r) => sum + r.errors.length, 0);
+
+      logger.info('Q-ID cleanup completed', {
+        durationMs,
+        durationSeconds: Math.round(durationMs / 1000),
+        reposChecked: results.length,
+        totalScanned,
+        totalDeleted,
+        prsCreated: results.filter(r => r.prCreated).map(r => r.prCreated),
+        totalErrors,
+      });
+    } catch (error: any) {
+      const durationMs = Date.now() - startTime;
+      logger.error('Q-ID cleanup failed', {
         durationMs,
         error: error.message,
         stack: error.stack,

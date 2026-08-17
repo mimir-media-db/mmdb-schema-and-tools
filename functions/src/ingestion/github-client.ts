@@ -410,4 +410,66 @@ export class GitHubClient {
       `Add ${person.name}`
     );
   }
+
+  async listDirectoryFiles(repo: string, dir: string, branch: string = 'master'): Promise<Array<{ name: string; path: string }>> {
+    try {
+      const { data } = await this.octokit.repos.getContent({
+        owner: this.owner,
+        repo,
+        path: dir,
+        ref: branch,
+      });
+
+      if (Array.isArray(data)) {
+        return data
+          .filter((item: any) => item.type === 'file' && item.name.endsWith('.json'))
+          .map((item: any) => ({ name: item.name, path: item.path }));
+      }
+    } catch (error: any) {
+      if (error.status === 404) {
+        return [];
+      }
+      throw error;
+    }
+
+    return [];
+  }
+
+  async getFileContent(repo: string, path: string, branch: string = 'master'): Promise<string> {
+    const { data } = await this.octokit.repos.getContent({
+      owner: this.owner,
+      repo,
+      path,
+      ref: branch,
+    });
+
+    if ('content' in data) {
+      return Buffer.from(data.content, 'base64').toString('utf-8');
+    }
+
+    throw new Error(`Could not read file content: ${path}`);
+  }
+
+  async deleteFile(repo: string, branch: string, path: string, message: string): Promise<void> {
+    // Get file SHA first
+    const { data } = await this.octokit.repos.getContent({
+      owner: this.owner,
+      repo,
+      path,
+      ref: branch,
+    });
+
+    if (!('sha' in data)) {
+      throw new Error(`Could not get SHA for file: ${path}`);
+    }
+
+    await this.octokit.repos.deleteFile({
+      owner: this.owner,
+      repo,
+      path,
+      message,
+      sha: data.sha,
+      branch,
+    });
+  }
 }

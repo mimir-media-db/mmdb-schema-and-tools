@@ -6,6 +6,18 @@
 import { WikidataMovie, WikidataPerson, WikidataSeries } from './wikidata-client.js';
 import { generateMovieId, generatePersonId, generateSeriesId } from './id-generator.js';
 
+/**
+ * Determines whether a title is usable for ingestion.
+ * Rejects Wikidata Q-IDs and titles that would produce an empty/unusable slug
+ * (e.g., purely non-Latin titles like Arabic-only or CJK-only).
+ */
+export function isUsableTitle(title: string): boolean {
+  if (!title) return false;
+  if (/^Q\d+$/i.test(title)) return false;
+  const slug = title.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s]/g, '').trim();
+  return slug.length >= 2;
+}
+
 export interface MMDBMovie {
   schema_version: number;
   id: string;
@@ -52,6 +64,10 @@ export interface MMDBSeries {
 }
 
 export function normalizeMovie(wikiMovie: WikidataMovie): MMDBMovie {
+  if (!isUsableTitle(wikiMovie.label)) {
+    throw new Error(`Cannot normalize: title is unusable (${wikiMovie.label})`);
+  }
+
   const id = generateMovieId(wikiMovie.label, wikiMovie.year);
   const today = new Date().toISOString().split('T')[0];
 
@@ -118,6 +134,10 @@ export function normalizePerson(wikiPerson: WikidataPerson): MMDBPerson {
 }
 
 export function normalizeSeries(wikiSeries: WikidataSeries): MMDBSeries {
+  if (!isUsableTitle(wikiSeries.label)) {
+    throw new Error(`Cannot normalize: title is unusable (${wikiSeries.label})`);
+  }
+
   const today = new Date().toISOString().split('T')[0];
   const id = generateSeriesId(wikiSeries.label);
 
