@@ -600,6 +600,15 @@ export async function rescanYear(options) {
   log(`PR created: ${repo}#${prData.number} (${prParts.join(' + ')})`);
   log(`Auto-merge: ${autoMergeOk ? '✓ enabled' : '⚠ could not enable'}`);
 
+  // Trigger CI workflow on the PR branch (GitHub Apps don't auto-trigger workflows)
+  try {
+    await ghApi('POST', `/repos/${ORG}/${repo}/actions/workflows/validate.yml/dispatches`, {
+      ref: branchName,
+    });
+    log(`CI: ✓ workflow dispatched`);
+  } catch {
+    log(`CI: ⚠ could not dispatch workflow`);
+  }
   return {
     movies: newMovies.length,
     series: newSeries.length,
@@ -687,6 +696,7 @@ on:
   push:
     branches: [master]
     paths: ['data/**']
+  workflow_dispatch:
 
 permissions:
   contents: write
