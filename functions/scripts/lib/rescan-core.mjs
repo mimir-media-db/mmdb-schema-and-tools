@@ -29,7 +29,11 @@ const QID_PATTERN = /^Q\d+$/i;
 export function isUsableTitle(title) {
   if (!title) return false;
   if (QID_PATTERN.test(title)) return false;
-  const slug = title.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s]/g, '').trim();
+  const slug = title.toLowerCase().normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, '')
+    .replace(/^(the|a|an)\s+/i, '')
+    .trim();
   return slug.length >= 2;
 }
 

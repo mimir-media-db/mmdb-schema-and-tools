@@ -14,7 +14,11 @@ import { generateMovieId, generatePersonId, generateSeriesId } from './id-genera
 export function isUsableTitle(title: string): boolean {
   if (!title) return false;
   if (/^Q\d+$/i.test(title)) return false;
-  const slug = title.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s]/g, '').trim();
+  const slug = title.toLowerCase().normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, '')
+    .replace(/^(the|a|an)\s+/i, '')
+    .trim();
   return slug.length >= 2;
 }
 
