@@ -19,7 +19,7 @@ import {
   parsePersonResults,
 } from './wikidata-client.js';
 import { GitHubClient } from './github-client.js';
-import { normalizeMovie, normalizePerson, normalizeSeries, MMDBMovie, MMDBSeries, MMDBPerson } from './normalizer.js';
+import { normalizeMovie, normalizePerson, normalizeSeries, MMDBMovie, MMDBSeries, MMDBPerson, isUsableTitle } from './normalizer.js';
 import { getState, updateState, incrementIngested, advanceBacklog, advanceBackwardBacklog, acquireLock, releaseLock } from './state.js';
 import {
   BACKLOG_LIMIT,
@@ -291,6 +291,12 @@ async function runBacklogPass(
       if (titlesIngested >= FORWARD_BACKLOG_LIMIT) break;
 
       try {
+        // Skip items with unusable titles (Q-IDs, non-Latin only, etc.)
+        if (!isUsableTitle(wikiMovie.label)) {
+          logger.debug('Skipping item with unusable title', { wikidataId: wikiMovie.wikidataId, label: wikiMovie.label });
+          continue;
+        }
+
         const movie = normalizeMovie(wikiMovie);
 
         if (allExistingMovieIds.has(movie.id)) {
@@ -336,6 +342,12 @@ async function runBacklogPass(
           if (titlesIngested >= FORWARD_BACKLOG_LIMIT) break;
 
           try {
+            // Skip items with unusable titles (Q-IDs, non-Latin only, etc.)
+            if (!isUsableTitle(wikiSeries.label)) {
+              logger.debug('Skipping item with unusable title', { wikidataId: wikiSeries.wikidataId, label: wikiSeries.label });
+              continue;
+            }
+
             const series = normalizeSeries(wikiSeries);
 
             if (allExistingSeriesIds.has(series.id)) {
@@ -449,6 +461,12 @@ async function runBackwardPass(
       if (titlesIngested >= BACKWARD_BACKLOG_LIMIT) break;
 
       try {
+        // Skip items with unusable titles (Q-IDs, non-Latin only, etc.)
+        if (!isUsableTitle(wikiMovie.label)) {
+          logger.debug('Skipping item with unusable title', { wikidataId: wikiMovie.wikidataId, label: wikiMovie.label });
+          continue;
+        }
+
         const movie = normalizeMovie(wikiMovie);
 
         if (allExistingMovieIds.has(movie.id)) {
@@ -494,6 +512,12 @@ async function runBackwardPass(
           if (titlesIngested >= BACKWARD_BACKLOG_LIMIT) break;
 
           try {
+            // Skip items with unusable titles (Q-IDs, non-Latin only, etc.)
+            if (!isUsableTitle(wikiSeries.label)) {
+              logger.debug('Skipping item with unusable title', { wikidataId: wikiSeries.wikidataId, label: wikiSeries.label });
+              continue;
+            }
+
             const series = normalizeSeries(wikiSeries);
 
             if (allExistingSeriesIds.has(series.id)) {
@@ -564,6 +588,18 @@ async function runRecentPass(
     } else {
       for (const wikiMovie of recentMovies) {
         if (titlesIngested >= RECENT_LIMIT) break;
+
+        // Skip items with unusable titles (Q-IDs, non-Latin only, etc.)
+        if (!isUsableTitle(wikiMovie.label)) {
+          logger.debug('Skipping item with unusable title', { wikidataId: wikiMovie.wikidataId, label: wikiMovie.label });
+          continue;
+        }
+
+        // Films without P577 get year=0; assign to current year
+        if (wikiMovie.year === 0) {
+          wikiMovie.year = MAX_YEAR;
+        }
+
         if (wikiMovie.year < 1900 || wikiMovie.year > MAX_YEAR) continue;
 
         try {
@@ -617,6 +653,18 @@ async function runRecentPass(
     } else {
       for (const wikiSeries of recentSeries) {
         if (titlesIngested >= RECENT_LIMIT) break;
+
+        // Skip items with unusable titles (Q-IDs, non-Latin only, etc.)
+        if (!isUsableTitle(wikiSeries.label)) {
+          logger.debug('Skipping item with unusable title', { wikidataId: wikiSeries.wikidataId, label: wikiSeries.label });
+          continue;
+        }
+
+        // Series without P580 get startYear=0; assign to current year
+        if (wikiSeries.startYear === 0) {
+          wikiSeries.startYear = MAX_YEAR;
+        }
+
         if (wikiSeries.startYear < 1900 || wikiSeries.startYear > MAX_YEAR) continue;
 
         try {

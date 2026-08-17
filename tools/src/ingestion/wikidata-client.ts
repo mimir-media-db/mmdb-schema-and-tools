@@ -34,6 +34,9 @@ export interface WikidataSeries {
   totalEpisodes?: number;
 }
 
+/** Languages for Wikidata label service (priority order) */
+const LABEL_LANGUAGES = 'en,es,fr,de,pt,it,ja,ko,zh,ar,hi,ru';
+
 export function buildMovieQuery(year: number, limit: number = 100, offset: number = 0): string {
   return `
 SELECT DISTINCT ?film ?filmLabel ?year ?imdb ?tmdb ?releaseDate ?runtime
@@ -47,7 +50,7 @@ WHERE {
   OPTIONAL { ?film wdt:P4947 ?tmdb. } # TMDB ID
   OPTIONAL { ?film wdt:P2047 ?runtime. } # duration
   
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "${LABEL_LANGUAGES}". }
 }
 ORDER BY ?releaseDate
 LIMIT ${limit}
@@ -116,9 +119,7 @@ WHERE {
   
   OPTIONAL { ?person wdt:P570 ?deathDate. }  # date of death
   
-  # Ensure entity has an English label
-  ?person rdfs:label ?personLabel .
-  FILTER(LANG(?personLabel) = "en")
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "${LABEL_LANGUAGES}". }
 }
 ORDER BY ?personLabel
 LIMIT ${limit}
@@ -148,9 +149,7 @@ WHERE {
   OPTIONAL { ?person wdt:P569 ?birthDate. }  # birth date
   OPTIONAL { ?person wdt:P570 ?deathDate. }  # death date
   
-  # Ensure entity has an English label
-  ?person rdfs:label ?personLabel .
-  FILTER(LANG(?personLabel) = "en")
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "${LABEL_LANGUAGES}". }
 }
 ORDER BY ?personLabel
 LIMIT ${limit}
@@ -192,9 +191,7 @@ WHERE {
   OPTIONAL { ?series wdt:P2437 ?seasons. }     # number of seasons
   OPTIONAL { ?series wdt:P1113 ?episodes. }    # number of episodes
   
-  # Ensure entity has an English label
-  ?series rdfs:label ?seriesLabel .
-  FILTER(LANG(?seriesLabel) = "en")
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "${LABEL_LANGUAGES}". }
 }
 ORDER BY ?seriesLabel
 LIMIT ${limit}

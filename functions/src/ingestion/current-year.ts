@@ -2,7 +2,8 @@
  * Current-year ingestion orchestrator.
  *
  * Nightly job that ingests movies/series from the current year only.
- * Keeps MMDB fresh without waiting for the backlog pipeline to reach the current year.
+ * Uses full dedup scan (no offset pagination) to avoid permanently skipping titles.
+ * Includes Pass B: recently-modified catch-up for films without P577 (publication date).
  * Shares the concurrency lock with the main orchestrator — only one can run at a time.
  */
 
@@ -11,13 +12,15 @@ import { GitHubClient } from './github-client.js';
 import {
   buildMovieQuery,
   buildSeriesQuery,
+  buildRecentlyModifiedMovieQuery,
+  buildRecentlyModifiedSeriesQuery,
   buildPersonQueryFromMovies,
   queryWikidata,
   parseMovieResults,
   parseSeriesResults,
   parsePersonResults,
 } from './wikidata-client.js';
-import { normalizeMovie, normalizeSeries, normalizePerson, MMDBMovie, MMDBSeries, MMDBPerson } from './normalizer.js';
+import { normalizeMovie, normalizeSeries, normalizePerson, MMDBMovie, MMDBSeries, MMDBPerson, isUsableTitle } from './normalizer.js';
 import { getState, updateState, incrementIngested, acquireLock, releaseLock } from './state.js';
 import { createYearRepo } from './repo-creator.js';
 import { shouldAutoPause, isResultCountSane } from './safeguards.js';
@@ -27,8 +30,10 @@ import {
   MAX_PEOPLE_PER_QUERY,
   MAX_EMPTY_RUNS,
   MAX_REPOS_PER_RUN,
-  CURRENT_YEAR_MOVIES_LIMIT,
+  CURRENT_YEAR_FULL_SCAN_LIMIT,
   CURRENT_YEAR_SERIES_LIMIT,
+  RECENT_MODIFIED_HOURS,
+  RECENT_MODIFIED_LIMIT,
 } from '../config.js';
 import { IngestionResult } from './orchestrator.js';
 
@@ -38,6 +43,15 @@ import { IngestionResult } from './orchestrator.js';
  */
 export function shouldResetCurrentYearState(stateYear: number, actualYear: number): boolean {
   return stateYear !== actualYear;
+}
+
+/**
+ * Pure function: compute the ISO timestamp for N hours ago.
+ * Exported for unit testing.
+ */
+export function computeModifiedAfter(hoursAgo: number, now: Date = new Date()): string {
+  const cutoff = new Date(now.getTime() - hoursAgo * 60 * 60 * 1000);
+  return cutoff.toISOString();
 }
 
 export async function runCurrentYearIngestion(dryRun: boolean = false): Promise<IngestionResult> {
@@ -78,7 +92,7 @@ export async function runCurrentYearIngestion(dryRun: boolean = false): Promise<
 
     // ─── Year Rollover Detection ─────────────────────────────────────────────
     if (shouldResetCurrentYearState(state.current_year, currentYear)) {
-      logger.info('Year rollover detected, resetting current-year offsets', {
+      logger.info('Year rollover detected, resetting current-year state', {
         previousYear: state.current_year,
         newYear: currentYear,
       });
@@ -89,18 +103,13 @@ export async function runCurrentYearIngestion(dryRun: boolean = false): Promise<
       });
     }
 
-    // Re-fetch state after potential update
-    const freshState = await getState();
-    const movieOffset = freshState.current_year_offset_movies;
-    const seriesOffset = freshState.current_year_offset_series;
-
     // Reset per-run repo creation counter
     await updateState({ repos_created_this_run: 0 });
 
-    logger.info('Starting current-year ingestion', {
+    logger.info('Starting current-year ingestion (full dedup scan)', {
       year: currentYear,
-      movieOffset,
-      seriesOffset,
+      fullScanLimit: CURRENT_YEAR_FULL_SCAN_LIMIT,
+      recentModifiedHours: RECENT_MODIFIED_HOURS,
       dryRun,
     });
 
@@ -131,12 +140,26 @@ export async function runCurrentYearIngestion(dryRun: boolean = false): Promise<
       logger.info(`Created new repo: ${yearRepo}`);
     }
 
-    // ─── Query Wikidata for movies ───────────────────────────────────────────
+    // ─── Get existing IDs for deduplication (shared across passes) ───────────
+    const existingMovieIds = await github.getExistingMovieIds(yearRepo);
+    const pendingMovieIds = await github.getMoviesInPendingPRs(yearRepo);
+    const allExistingMovieIds = new Set([...existingMovieIds, ...pendingMovieIds]);
+
+    const existingSeriesIds = await github.getExistingSeriesIds(yearRepo);
+    const pendingSeriesIds = await github.getSeriesInPendingPRs(yearRepo);
+    const allExistingSeriesIds = new Set([...existingSeriesIds, ...pendingSeriesIds]);
+
     const movieWikidataIds: string[] = [];
     const movies: MMDBMovie[] = [];
+    const series: MMDBSeries[] = [];
+    // Track IDs added in this run to avoid duplicates between Pass A and Pass B
+    const addedMovieIds = new Set<string>();
+    const addedSeriesIds = new Set<string>();
 
+    // ─── Pass A: Full dedup scan (movies with P577 in current year) ──────────
     try {
-      const movieQuery = buildMovieQuery(currentYear, CURRENT_YEAR_MOVIES_LIMIT, movieOffset);
+      // Query all movies for current year with no offset — dedup handles duplicates
+      const movieQuery = buildMovieQuery(currentYear, CURRENT_YEAR_FULL_SCAN_LIMIT, 0);
       const movieResults = await queryWikidata(movieQuery);
       const parsedMovies = parseMovieResults(movieResults);
 
@@ -147,20 +170,23 @@ export async function runCurrentYearIngestion(dryRun: boolean = false): Promise<
         });
         result.errors.push(`Sanity check failed: current-year movie query returned ${parsedMovies.length} results`);
       } else {
-        // Deduplication
-        const existingMovieIds = await github.getExistingMovieIds(yearRepo);
-        const pendingMovieIds = await github.getMoviesInPendingPRs(yearRepo);
-        const allExistingMovieIds = new Set([...existingMovieIds, ...pendingMovieIds]);
+        logger.info('Pass A: movies fetched', { count: parsedMovies.length });
 
         for (const wikiMovie of parsedMovies) {
           try {
+            // Skip items with unusable titles (Q-IDs, non-Latin only, etc.)
+            if (!isUsableTitle(wikiMovie.label)) {
+              logger.debug('Skipping item with unusable title', { wikidataId: wikiMovie.wikidataId, label: wikiMovie.label });
+              continue;
+            }
+
             const movie = normalizeMovie(wikiMovie);
             if (allExistingMovieIds.has(movie.id)) {
-              logger.debug('Skipping duplicate movie', { id: movie.id });
               continue;
             }
             movies.push(movie);
             movieWikidataIds.push(wikiMovie.wikidataId);
+            addedMovieIds.add(movie.id);
           } catch (error: any) {
             result.errors.push(`Movie normalize error: ${wikiMovie.label} — ${error.message}`);
             logger.error('Movie normalization failed', { movie: wikiMovie.label, error: error.message });
@@ -168,15 +194,13 @@ export async function runCurrentYearIngestion(dryRun: boolean = false): Promise<
         }
       }
     } catch (error: any) {
-      result.errors.push(`Current-year movie query error: ${error.message}`);
-      logger.error('Current-year movie query failed', { year: currentYear, error: error.message });
+      result.errors.push(`Pass A movie query error: ${error.message}`);
+      logger.error('Pass A movie query failed', { year: currentYear, error: error.message });
     }
 
-    // ─── Query Wikidata for series ───────────────────────────────────────────
-    const series: MMDBSeries[] = [];
-
+    // ─── Pass A: Full dedup scan (series with P580 in current year) ──────────
     try {
-      const seriesQuery = buildSeriesQuery(currentYear, CURRENT_YEAR_SERIES_LIMIT, seriesOffset);
+      const seriesQuery = buildSeriesQuery(currentYear, CURRENT_YEAR_SERIES_LIMIT, 0);
       const seriesResults = await queryWikidata(seriesQuery);
       const parsedSeries = parseSeriesResults(seriesResults);
 
@@ -187,19 +211,22 @@ export async function runCurrentYearIngestion(dryRun: boolean = false): Promise<
         });
         result.errors.push(`Sanity check failed: current-year series query returned ${parsedSeries.length} results`);
       } else {
-        // Deduplication
-        const existingSeriesIds = await github.getExistingSeriesIds(yearRepo);
-        const pendingSeriesIds = await github.getSeriesInPendingPRs(yearRepo);
-        const allExistingSeriesIds = new Set([...existingSeriesIds, ...pendingSeriesIds]);
+        logger.info('Pass A: series fetched', { count: parsedSeries.length });
 
         for (const wikiSeries of parsedSeries) {
           try {
+            // Skip items with unusable titles (Q-IDs, non-Latin only, etc.)
+            if (!isUsableTitle(wikiSeries.label)) {
+              logger.debug('Skipping item with unusable title', { wikidataId: wikiSeries.wikidataId, label: wikiSeries.label });
+              continue;
+            }
+
             const seriesItem = normalizeSeries(wikiSeries);
             if (allExistingSeriesIds.has(seriesItem.id)) {
-              logger.debug('Skipping duplicate series', { id: seriesItem.id });
               continue;
             }
             series.push(seriesItem);
+            addedSeriesIds.add(seriesItem.id);
           } catch (error: any) {
             result.errors.push(`Series normalize error: ${wikiSeries.label} — ${error.message}`);
             logger.error('Series normalization failed', { series: wikiSeries.label, error: error.message });
@@ -207,8 +234,91 @@ export async function runCurrentYearIngestion(dryRun: boolean = false): Promise<
         }
       }
     } catch (error: any) {
-      result.errors.push(`Current-year series query error: ${error.message}`);
-      logger.error('Current-year series query failed', { year: currentYear, error: error.message });
+      result.errors.push(`Pass A series query error: ${error.message}`);
+      logger.error('Pass A series query failed', { year: currentYear, error: error.message });
+    }
+
+    // ─── Pass B: Recently modified catch-up (films without P577) ─────────────
+    const modifiedAfter = computeModifiedAfter(RECENT_MODIFIED_HOURS);
+
+    try {
+      const recentMovieQuery = buildRecentlyModifiedMovieQuery(modifiedAfter, currentYear, RECENT_MODIFIED_LIMIT);
+      const recentResults = await queryWikidata(recentMovieQuery);
+      const recentMovies = parseMovieResults(recentResults);
+
+      logger.info('Pass B: recently modified movies fetched', { count: recentMovies.length });
+
+      for (const wikiMovie of recentMovies) {
+        try {
+          // Skip items with unusable titles (Q-IDs, non-Latin only, etc.)
+          if (!isUsableTitle(wikiMovie.label)) {
+            logger.debug('Skipping item with unusable title', { wikidataId: wikiMovie.wikidataId, label: wikiMovie.label });
+            continue;
+          }
+
+          // Films with year=0 (no P577) get assigned to current year
+          if (wikiMovie.year === 0) {
+            wikiMovie.year = currentYear;
+          }
+
+          const movie = normalizeMovie(wikiMovie);
+
+          // Skip if already exists or already added in Pass A
+          if (allExistingMovieIds.has(movie.id) || addedMovieIds.has(movie.id)) {
+            continue;
+          }
+
+          movies.push(movie);
+          movieWikidataIds.push(wikiMovie.wikidataId);
+          addedMovieIds.add(movie.id);
+        } catch (error: any) {
+          result.errors.push(`Pass B movie normalize error: ${wikiMovie.label} — ${error.message}`);
+          logger.error('Pass B movie normalization failed', { movie: wikiMovie.label, error: error.message });
+        }
+      }
+    } catch (error: any) {
+      result.errors.push(`Pass B movie query error: ${error.message}`);
+      logger.error('Pass B movie query failed', { error: error.message });
+    }
+
+    // ─── Pass B: Recently modified series catch-up ───────────────────────────
+    try {
+      const recentSeriesQuery = buildRecentlyModifiedSeriesQuery(modifiedAfter, currentYear, Math.floor(RECENT_MODIFIED_LIMIT / 2));
+      const recentSeriesResults = await queryWikidata(recentSeriesQuery);
+      const recentSeries = parseSeriesResults(recentSeriesResults);
+
+      logger.info('Pass B: recently modified series fetched', { count: recentSeries.length });
+
+      for (const wikiSeries of recentSeries) {
+        try {
+          // Skip items with unusable titles (Q-IDs, non-Latin only, etc.)
+          if (!isUsableTitle(wikiSeries.label)) {
+            logger.debug('Skipping item with unusable title', { wikidataId: wikiSeries.wikidataId, label: wikiSeries.label });
+            continue;
+          }
+
+          // Series with startYear=0 (no P580) get assigned to current year
+          if (wikiSeries.startYear === 0) {
+            wikiSeries.startYear = currentYear;
+          }
+
+          const seriesItem = normalizeSeries(wikiSeries);
+
+          // Skip if already exists or already added in Pass A
+          if (allExistingSeriesIds.has(seriesItem.id) || addedSeriesIds.has(seriesItem.id)) {
+            continue;
+          }
+
+          series.push(seriesItem);
+          addedSeriesIds.add(seriesItem.id);
+        } catch (error: any) {
+          result.errors.push(`Pass B series normalize error: ${wikiSeries.label} — ${error.message}`);
+          logger.error('Pass B series normalization failed', { series: wikiSeries.label, error: error.message });
+        }
+      }
+    } catch (error: any) {
+      result.errors.push(`Pass B series query error: ${error.message}`);
+      logger.error('Pass B series query failed', { error: error.message });
     }
 
     // ─── Create title PRs ────────────────────────────────────────────────────
@@ -254,8 +364,8 @@ export async function runCurrentYearIngestion(dryRun: boolean = false): Promise<
             branchName,
             'master',
             `Automated current-year nightly ingestion for ${currentYear}:\n\n` +
-            (movies.length > 0 ? `**Movies (${result.moviesIngested}):**\n${movies.slice(0, 20).map(m => `- ${m.title}`).join('\n')}\n\n` : '') +
-            (series.length > 0 ? `**Series (${result.seriesIngested}):**\n${series.slice(0, 20).map(s => `- ${s.title}`).join('\n')}\n` : '')
+            (movies.length > 0 ? `**Movies (${result.moviesIngested}):**\n${movies.slice(0, 20).map(m => m.title).join('\n')}\n\n` : '') +
+            (series.length > 0 ? `**Series (${result.seriesIngested}):**\n${series.slice(0, 20).map(s => s.title).join('\n')}\n` : '')
           );
           result.prsCreated.push(`${yearRepo}#${prNumber}`);
           logger.info('Current-year title PR created', { repo: yearRepo, pr: prNumber });
@@ -357,12 +467,8 @@ export async function runCurrentYearIngestion(dryRun: boolean = false): Promise<
 
     // ─── Update state ────────────────────────────────────────────────────────
     if (!dryRun) {
-      // Advance offsets
-      await updateState({
-        current_year_offset_movies: movieOffset + CURRENT_YEAR_MOVIES_LIMIT,
-        current_year_offset_series: seriesOffset + CURRENT_YEAR_SERIES_LIMIT,
-      });
-
+      // NOTE: We no longer advance offset-based pagination. The offset fields
+      // remain in state for backward compatibility but are not used.
       await incrementIngested(result.moviesIngested, result.seriesIngested, result.peopleIngested);
 
       // Track consecutive empty runs

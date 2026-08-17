@@ -5,7 +5,7 @@
  */
 
 import { logger } from 'firebase-functions/v2';
-import { WIKIDATA_RATE_LIMIT_MS } from '../config.js';
+import { WIKIDATA_RATE_LIMIT_MS, LABEL_LANGUAGES } from '../config.js';
 
 export interface WikidataMovie {
   id: string;
@@ -56,7 +56,7 @@ WHERE {
   OPTIONAL { ?film wdt:P4947 ?tmdb. } # TMDB ID
   OPTIONAL { ?film wdt:P2047 ?runtime. } # duration
   
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "${LABEL_LANGUAGES}". }
 }
 ORDER BY ?releaseDate
 LIMIT ${limit}
@@ -69,16 +69,17 @@ export function buildRecentMovieQuery(modifiedAfter: string, limit: number = 40)
 SELECT DISTINCT ?film ?filmLabel ?year ?imdb ?tmdb ?releaseDate ?runtime
 WHERE {
   ?film wdt:P31 wd:Q11424.           # instance of film
-  ?film wdt:P577 ?releaseDate.       # publication date
   ?film schema:dateModified ?modified.
-  BIND(YEAR(?releaseDate) AS ?year)
   FILTER(?modified > "${modifiedAfter}"^^xsd:dateTime)
+  
+  OPTIONAL { ?film wdt:P577 ?releaseDate. } # publication date (optional)
+  BIND(IF(BOUND(?releaseDate), YEAR(?releaseDate), 0) AS ?year)
   
   OPTIONAL { ?film wdt:P345 ?imdb. } # IMDb ID
   OPTIONAL { ?film wdt:P4947 ?tmdb. } # TMDB ID
   OPTIONAL { ?film wdt:P2047 ?runtime. } # duration
   
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "${LABEL_LANGUAGES}". }
 }
 ORDER BY DESC(?modified)
 LIMIT ${limit}
@@ -101,9 +102,7 @@ WHERE {
   OPTIONAL { ?series wdt:P2437 ?seasons. }     # number of seasons
   OPTIONAL { ?series wdt:P1113 ?episodes. }    # number of episodes
   
-  # Ensure entity has an English label
-  ?series rdfs:label ?seriesLabel .
-  FILTER(LANG(?seriesLabel) = "en")
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "${LABEL_LANGUAGES}". }
 }
 ORDER BY ?seriesLabel
 LIMIT ${limit}
@@ -116,18 +115,75 @@ export function buildRecentSeriesQuery(modifiedAfter: string, limit: number = 40
 SELECT DISTINCT ?series ?seriesLabel ?startDate ?endDate ?imdb ?tmdb ?seasons ?episodes
 WHERE {
   ?series wdt:P31 wd:Q5398426.       # instance of television series
-  ?series wdt:P580 ?startDate.       # start time
   ?series schema:dateModified ?modified.
   FILTER(?modified > "${modifiedAfter}"^^xsd:dateTime)
   
+  OPTIONAL { ?series wdt:P580 ?startDate. } # start time (optional)
   OPTIONAL { ?series wdt:P582 ?endDate. }      # end time
   OPTIONAL { ?series wdt:P345 ?imdb. }         # IMDb ID
   OPTIONAL { ?series wdt:P4983 ?tmdb. }        # TMDB ID
   OPTIONAL { ?series wdt:P2437 ?seasons. }     # number of seasons
   OPTIONAL { ?series wdt:P1113 ?episodes. }    # number of episodes
   
-  ?series rdfs:label ?seriesLabel .
-  FILTER(LANG(?seriesLabel) = "en")
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "${LABEL_LANGUAGES}". }
+}
+ORDER BY DESC(?modified)
+LIMIT ${limit}
+`.trim();
+}
+
+/**
+ * Query for recently modified films that may lack P577 (publication date).
+ * Catches films added/modified in the last N hours, even without a release date.
+ * Films with year=0 (no P577) are assigned to the current year.
+ */
+export function buildRecentlyModifiedMovieQuery(modifiedAfter: string, currentYear: number, limit: number = 200): string {
+  return `
+SELECT DISTINCT ?film ?filmLabel ?year ?imdb ?tmdb ?releaseDate ?runtime
+WHERE {
+  ?film wdt:P31 wd:Q11424.
+  ?film schema:dateModified ?modified.
+  FILTER(?modified > "${modifiedAfter}"^^xsd:dateTime)
+  
+  OPTIONAL { ?film wdt:P577 ?releaseDate. }
+  BIND(IF(BOUND(?releaseDate), YEAR(?releaseDate), 0) AS ?year)
+  FILTER(?year = ${currentYear} || ?year = 0)
+  
+  OPTIONAL { ?film wdt:P345 ?imdb. }
+  OPTIONAL { ?film wdt:P4947 ?tmdb. }
+  OPTIONAL { ?film wdt:P2047 ?runtime. }
+  
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "${LABEL_LANGUAGES}". }
+}
+ORDER BY DESC(?modified)
+LIMIT ${limit}
+`.trim();
+}
+
+/**
+ * Query for recently modified series that may lack P580 (start date).
+ * Catches series added/modified in the last N hours, even without a start date.
+ * Series with startYear=0 (no P580) are assigned to the current year.
+ */
+export function buildRecentlyModifiedSeriesQuery(modifiedAfter: string, currentYear: number, limit: number = 100): string {
+  return `
+SELECT DISTINCT ?series ?seriesLabel ?startDate ?endDate ?imdb ?tmdb ?seasons ?episodes
+WHERE {
+  ?series wdt:P31 wd:Q5398426.
+  ?series schema:dateModified ?modified.
+  FILTER(?modified > "${modifiedAfter}"^^xsd:dateTime)
+  
+  OPTIONAL { ?series wdt:P580 ?startDate. }
+  BIND(IF(BOUND(?startDate), YEAR(?startDate), 0) AS ?startYear)
+  FILTER(?startYear = ${currentYear} || ?startYear = 0)
+  
+  OPTIONAL { ?series wdt:P582 ?endDate. }
+  OPTIONAL { ?series wdt:P345 ?imdb. }
+  OPTIONAL { ?series wdt:P4983 ?tmdb. }
+  OPTIONAL { ?series wdt:P2437 ?seasons. }
+  OPTIONAL { ?series wdt:P1113 ?episodes. }
+  
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "${LABEL_LANGUAGES}". }
 }
 ORDER BY DESC(?modified)
 LIMIT ${limit}
@@ -156,9 +212,7 @@ WHERE {
   OPTIONAL { ?person wdt:P569 ?birthDate. }  # birth date
   OPTIONAL { ?person wdt:P570 ?deathDate. }  # death date
   
-  # Ensure entity has an English label
-  ?person rdfs:label ?personLabel .
-  FILTER(LANG(?personLabel) = "en")
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "${LABEL_LANGUAGES}". }
 }
 ORDER BY ?personLabel
 LIMIT ${limit}

@@ -15,7 +15,7 @@ export const FORWARD_BACKLOG_LIMIT = 100;
 export const BACKWARD_BACKLOG_LIMIT = 100;
 
 /** Number of recent titles to fetch per run */
-export const RECENT_LIMIT = 40;
+export const RECENT_LIMIT = 100;
 
 /** Delay between Wikidata API queries in milliseconds */
 export const WIKIDATA_RATE_LIMIT_MS = 500;
@@ -73,3 +73,21 @@ export const MIN_BACKLOG_YEAR = 1888;
 
 /** Maximum run duration in milliseconds before graceful shutdown (8 min, hard limit is 9 min) */
 export const RUN_TIMEOUT_MS = 480_000;
+
+/** Current year full scan limit — fetch all titles for dedup (no offset pagination) */
+export const CURRENT_YEAR_FULL_SCAN_LIMIT = 2000;
+
+/** Hours to look back for recently modified films in the catch-up pass */
+export const RECENT_MODIFIED_HOURS = 48;
+
+/** Maximum recently modified titles to fetch in catch-up pass */
+export const RECENT_MODIFIED_LIMIT = 200;
+
+/** Languages for Wikidata label service (priority order) */
+export const LABEL_LANGUAGES = 'en,es,fr,de,pt,it,ja,ko,zh,ar,hi,ru';
+
+/** Weekly cleanup schedule */
+export const CLEANUP_SCHEDULE = 'every sunday 04:00';
+
+/** Year repos to check for cleanup (current year + last 2) */
+export const CLEANUP_YEAR_RANGE = 3;

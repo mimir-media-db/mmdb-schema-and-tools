@@ -4,7 +4,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { shouldResetCurrentYearState } from '../../src/ingestion/current-year.js';
+import { shouldResetCurrentYearState, computeModifiedAfter } from '../../src/ingestion/current-year.js';
 
 describe('Current Year Ingestion', () => {
   describe('shouldResetCurrentYearState', () => {
@@ -35,6 +35,39 @@ describe('Current Year Ingestion', () => {
     });
   });
 
+  describe('computeModifiedAfter', () => {
+    it('should compute timestamp N hours in the past', () => {
+      const now = new Date('2026-08-16T12:00:00Z');
+      const result = computeModifiedAfter(48, now);
+      assert.strictEqual(result, '2026-08-14T12:00:00.000Z');
+    });
+
+    it('should handle zero hours (returns current time)', () => {
+      const now = new Date('2026-08-16T12:00:00Z');
+      const result = computeModifiedAfter(0, now);
+      assert.strictEqual(result, '2026-08-16T12:00:00.000Z');
+    });
+
+    it('should handle 24 hours (one day back)', () => {
+      const now = new Date('2026-08-16T00:00:00Z');
+      const result = computeModifiedAfter(24, now);
+      assert.strictEqual(result, '2026-08-15T00:00:00.000Z');
+    });
+
+    it('should cross month boundary correctly', () => {
+      const now = new Date('2026-09-01T06:00:00Z');
+      const result = computeModifiedAfter(48, now);
+      assert.strictEqual(result, '2026-08-30T06:00:00.000Z');
+    });
+
+    it('should return valid ISO string', () => {
+      const result = computeModifiedAfter(48);
+      // Should be a valid ISO date string
+      assert.ok(!isNaN(Date.parse(result)), 'Should be a parseable date');
+      assert.ok(result.endsWith('Z'), 'Should be UTC');
+    });
+  });
+
   describe('current year determination', () => {
     it('should derive current year correctly from Date', () => {
       const currentYear = new Date().getFullYear();
@@ -44,38 +77,31 @@ describe('Current Year Ingestion', () => {
     });
   });
 
-  describe('offset advancement', () => {
-    it('should advance movie offset by CURRENT_YEAR_MOVIES_LIMIT', async () => {
-      // Import config to verify the constant
+  describe('full scan configuration', () => {
+    it('should use CURRENT_YEAR_FULL_SCAN_LIMIT instead of offset-based pagination', async () => {
+      const { CURRENT_YEAR_FULL_SCAN_LIMIT } = await import('../../src/config.js');
+      assert.strictEqual(CURRENT_YEAR_FULL_SCAN_LIMIT, 2000);
+    });
+
+    it('should have RECENT_MODIFIED_HOURS set to 48', async () => {
+      const { RECENT_MODIFIED_HOURS } = await import('../../src/config.js');
+      assert.strictEqual(RECENT_MODIFIED_HOURS, 48);
+    });
+
+    it('should have RECENT_MODIFIED_LIMIT set to 200', async () => {
+      const { RECENT_MODIFIED_LIMIT } = await import('../../src/config.js');
+      assert.strictEqual(RECENT_MODIFIED_LIMIT, 200);
+    });
+
+    it('should keep CURRENT_YEAR_MOVIES_LIMIT for backward compat but not use it for pagination', async () => {
+      // The constant still exists for backward compatibility
       const { CURRENT_YEAR_MOVIES_LIMIT } = await import('../../src/config.js');
-      assert.strictEqual(CURRENT_YEAR_MOVIES_LIMIT, 100);
-
-      // Simulate offset advancement
-      const initialOffset = 0;
-      const newOffset = initialOffset + CURRENT_YEAR_MOVIES_LIMIT;
-      assert.strictEqual(newOffset, 100);
+      assert.strictEqual(typeof CURRENT_YEAR_MOVIES_LIMIT, 'number');
     });
 
-    it('should advance series offset by CURRENT_YEAR_SERIES_LIMIT', async () => {
-      const { CURRENT_YEAR_SERIES_LIMIT } = await import('../../src/config.js');
-      assert.strictEqual(CURRENT_YEAR_SERIES_LIMIT, 50);
-
-      const initialOffset = 50;
-      const newOffset = initialOffset + CURRENT_YEAR_SERIES_LIMIT;
-      assert.strictEqual(newOffset, 100);
-    });
-
-    it('should reset offsets on year rollover', () => {
-      const stateYear = 2025;
-      const actualYear = 2026;
-      const shouldReset = shouldResetCurrentYearState(stateYear, actualYear);
-      assert.strictEqual(shouldReset, true);
-
-      // After reset, offsets go to 0
-      const newMovieOffset = shouldReset ? 0 : 200;
-      const newSeriesOffset = shouldReset ? 0 : 100;
-      assert.strictEqual(newMovieOffset, 0);
-      assert.strictEqual(newSeriesOffset, 0);
+    it('should have increased RECENT_LIMIT to 100', async () => {
+      const { RECENT_LIMIT } = await import('../../src/config.js');
+      assert.strictEqual(RECENT_LIMIT, 100);
     });
   });
 

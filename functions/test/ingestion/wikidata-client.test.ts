@@ -11,6 +11,8 @@ import {
   buildPersonQueryFromMovies,
   buildRecentMovieQuery,
   buildRecentSeriesQuery,
+  buildRecentlyModifiedMovieQuery,
+  buildRecentlyModifiedSeriesQuery,
   parseMovieResults,
   parseSeriesResults,
   parsePersonResults,
@@ -73,6 +75,27 @@ describe('Wikidata Client', () => {
         const query = buildRecentMovieQuery('2026-08-01T00:00:00Z', 40);
         assert.ok(query.includes('ORDER BY DESC(?modified)'), 'should order descending');
       });
+
+      it('should make P577 (publication date) OPTIONAL', () => {
+        const query = buildRecentMovieQuery('2026-08-01T00:00:00Z', 40);
+        assert.ok(
+          query.includes('OPTIONAL { ?film wdt:P577 ?releaseDate. }'),
+          'P577 should be OPTIONAL'
+        );
+        // Should NOT have a required P577 line
+        assert.ok(
+          !query.includes('?film wdt:P577 ?releaseDate.\n'),
+          'P577 should NOT be required (non-optional)'
+        );
+      });
+
+      it('should use BIND with IF(BOUND(...)) for year derivation', () => {
+        const query = buildRecentMovieQuery('2026-08-01T00:00:00Z', 40);
+        assert.ok(
+          query.includes('BIND(IF(BOUND(?releaseDate), YEAR(?releaseDate), 0) AS ?year)'),
+          'should derive year with fallback to 0'
+        );
+      });
     });
 
     describe('buildRecentSeriesQuery', () => {
@@ -87,6 +110,82 @@ describe('Wikidata Client', () => {
 
       it('should order by modified date descending', () => {
         const query = buildRecentSeriesQuery('2026-08-01T00:00:00Z', 20);
+        assert.ok(query.includes('ORDER BY DESC(?modified)'), 'should order descending');
+      });
+
+      it('should make P580 (start date) OPTIONAL', () => {
+        const query = buildRecentSeriesQuery('2026-08-01T00:00:00Z', 20);
+        assert.ok(
+          query.includes('OPTIONAL { ?series wdt:P580 ?startDate. }'),
+          'P580 should be OPTIONAL'
+        );
+      });
+    });
+
+    describe('buildRecentlyModifiedMovieQuery', () => {
+      it('should include dateModified filter, currentYear filter, and limit', () => {
+        const query = buildRecentlyModifiedMovieQuery('2026-08-14T00:00:00Z', 2026, 200);
+        assert.ok(
+          query.includes('"2026-08-14T00:00:00Z"^^xsd:dateTime'),
+          'should include dateModified filter'
+        );
+        assert.ok(query.includes('FILTER(?year = 2026 || ?year = 0)'), 'should filter year=current OR year=0');
+        assert.ok(query.includes('LIMIT 200'), 'should set limit');
+      });
+
+      it('should make P577 OPTIONAL to catch films without publication date', () => {
+        const query = buildRecentlyModifiedMovieQuery('2026-08-14T00:00:00Z', 2026, 200);
+        assert.ok(
+          query.includes('OPTIONAL { ?film wdt:P577 ?releaseDate. }'),
+          'P577 should be OPTIONAL'
+        );
+      });
+
+      it('should use BIND to derive year with fallback to 0', () => {
+        const query = buildRecentlyModifiedMovieQuery('2026-08-14T00:00:00Z', 2026, 200);
+        assert.ok(
+          query.includes('BIND(IF(BOUND(?releaseDate), YEAR(?releaseDate), 0) AS ?year)'),
+          'should derive year with fallback to 0'
+        );
+      });
+
+      it('should order by modified descending', () => {
+        const query = buildRecentlyModifiedMovieQuery('2026-08-14T00:00:00Z', 2026, 200);
+        assert.ok(query.includes('ORDER BY DESC(?modified)'), 'should order descending');
+      });
+
+      it('should query for instances of film (Q11424)', () => {
+        const query = buildRecentlyModifiedMovieQuery('2026-08-14T00:00:00Z', 2026, 200);
+        assert.ok(query.includes('wd:Q11424'), 'should reference film entity');
+      });
+    });
+
+    describe('buildRecentlyModifiedSeriesQuery', () => {
+      it('should include dateModified filter, currentYear filter, and limit', () => {
+        const query = buildRecentlyModifiedSeriesQuery('2026-08-14T00:00:00Z', 2026, 100);
+        assert.ok(
+          query.includes('"2026-08-14T00:00:00Z"^^xsd:dateTime'),
+          'should include dateModified filter'
+        );
+        assert.ok(query.includes('FILTER(?startYear = 2026 || ?startYear = 0)'), 'should filter startYear=current OR 0');
+        assert.ok(query.includes('LIMIT 100'), 'should set limit');
+      });
+
+      it('should make P580 OPTIONAL to catch series without start date', () => {
+        const query = buildRecentlyModifiedSeriesQuery('2026-08-14T00:00:00Z', 2026, 100);
+        assert.ok(
+          query.includes('OPTIONAL { ?series wdt:P580 ?startDate. }'),
+          'P580 should be OPTIONAL'
+        );
+      });
+
+      it('should query for instances of television series (Q5398426)', () => {
+        const query = buildRecentlyModifiedSeriesQuery('2026-08-14T00:00:00Z', 2026, 100);
+        assert.ok(query.includes('wd:Q5398426'), 'should reference TV series entity');
+      });
+
+      it('should order by modified descending', () => {
+        const query = buildRecentlyModifiedSeriesQuery('2026-08-14T00:00:00Z', 2026, 100);
         assert.ok(query.includes('ORDER BY DESC(?modified)'), 'should order descending');
       });
     });
@@ -150,6 +249,27 @@ describe('Wikidata Client', () => {
         const emptyResponse = { results: { bindings: [] } };
         const movies = parseMovieResults(emptyResponse);
         assert.deepStrictEqual(movies, []);
+      });
+
+      it('should parse year as 0 when year binding is "0" (no P577)', () => {
+        const noPubDateResponse = {
+          results: {
+            bindings: [
+              {
+                film: { value: 'http://www.wikidata.org/entity/Q12345' },
+                filmLabel: { value: 'New Film Without PubDate' },
+                year: { value: '0' },
+                imdb: { value: 'tt9999999' },
+              },
+            ],
+          },
+        };
+
+        const movies = parseMovieResults(noPubDateResponse);
+        assert.strictEqual(movies.length, 1);
+        assert.strictEqual(movies[0].year, 0);
+        assert.strictEqual(movies[0].wikidataId, 'Q12345');
+        assert.strictEqual(movies[0].label, 'New Film Without PubDate');
       });
     });
 
