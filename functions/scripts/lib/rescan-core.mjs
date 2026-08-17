@@ -808,15 +808,14 @@ jobs:
     await new Promise(r => setTimeout(r, GITHUB_RATE_LIMIT_MS));
   }
 
-  // 4. Set up branch protection
+  // 4. Set up branch protection (allow CI to push index updates)
   await ghApi('PUT', `/repos/${ORG}/${repoName}/branches/master/protection`, {
-    required_status_checks: {
-      strict: false,
-      contexts: ['validate'],
-    },
+    required_status_checks: null,
     enforce_admins: false,
     required_pull_request_reviews: null,
     restrictions: null,
+    allow_force_pushes: false,
+    allow_deletions: false,
   });
 
   // 5. Set workflow permissions
