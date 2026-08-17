@@ -756,7 +756,7 @@ jobs:
           git diff --exit-code data/*/index.json || echo "changed=true" >> $GITHUB_OUTPUT
 
       - name: Verify only index files changed
-        if: steps.check_changes.outputs.changed == 'true' && github.event_name == 'push'
+        if: steps.check_changes.outputs.changed == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         run: |
           cd data
           git add data/movies/index.json data/series/index.json data/people/index.json 2>/dev/null || true
@@ -769,7 +769,7 @@ jobs:
           done
 
       - name: Commit index updates
-        if: steps.check_changes.outputs.changed == 'true' && github.event_name == 'push'
+        if: steps.check_changes.outputs.changed == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         run: |
           cd data
           git config user.name "github-actions[bot]"
