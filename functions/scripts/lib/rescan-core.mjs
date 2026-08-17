@@ -720,6 +720,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: data
+          persist-credentials: false
 
       - name: Checkout tools repo
         uses: actions/checkout@v4
@@ -753,27 +754,24 @@ jobs:
         id: check_changes
         run: |
           cd data
-          git diff --exit-code data/*/index.json || echo "changed=true" >> $GITHUB_OUTPUT
+          git diff --exit-code data/*/index.json || echo "changed=true" >> \$GITHUB_OUTPUT
 
-      - name: Verify only index files changed
+      - name: Generate App token
+        if: steps.check_changes.outputs.changed == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: \${{ secrets.MMDB_BOT_APP_ID }}
+          private-key: \${{ secrets.MMDB_BOT_PRIVATE_KEY }}
+
+      - name: Commit and push index updates
         if: steps.check_changes.outputs.changed == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         run: |
           cd data
           git add data/*/index.json 2>/dev/null || true
-          STAGED=$(git diff --cached --name-only)
-          for f in $STAGED; do
-            if [[ ! "$f" == *index.json ]]; then
-              echo "ERROR: Unexpected file staged: $f"
-              exit 1
-            fi
-          done
-
-      - name: Commit index updates
-        if: steps.check_changes.outputs.changed == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-        run: |
-          cd data
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "mmdb-bot[bot]"
+          git config user.email "mmdb-bot[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:\${{ steps.app-token.outputs.token }}@github.com/\${{ github.repository }}.git"
           git commit -m "chore: update indexes [skip ci]" || echo "Nothing to commit"
           git push
 `;
@@ -808,14 +806,15 @@ jobs:
     await new Promise(r => setTimeout(r, GITHUB_RATE_LIMIT_MS));
   }
 
-  // 4. Set up branch protection (allow CI to push index updates)
+  // 4. Set up branch protection
   await ghApi('PUT', `/repos/${ORG}/${repoName}/branches/master/protection`, {
-    required_status_checks: null,
+    required_status_checks: {
+      strict: false,
+      contexts: ['validate'],
+    },
     enforce_admins: false,
     required_pull_request_reviews: null,
     restrictions: null,
-    allow_force_pushes: false,
-    allow_deletions: false,
   });
 
   // 5. Set workflow permissions
