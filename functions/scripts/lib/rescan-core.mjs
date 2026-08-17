@@ -613,12 +613,12 @@ export async function hasRecentRescanBranch(ghApi, repo, year) {
 export async function createYearRepo(ghApi, year) {
   const repoName = `mmdb-${year}`;
 
-  // 1. Create the repo
+  // 1. Create the repo (no auto_init — we'll create the initial commit ourselves)
   const { ok, data } = await ghApi('POST', `/orgs/${ORG}/repos`, {
     name: repoName,
     description: `MMDB — Movies and series released in ${year}`,
     visibility: 'public',
-    auto_init: true,
+    auto_init: false,
     has_issues: false,
     has_projects: false,
     has_wiki: false,
@@ -634,13 +634,9 @@ export async function createYearRepo(ghApi, year) {
   }
 
   // Wait for repo to be ready
-  await new Promise(r => setTimeout(r, 2000));
+  await new Promise(r => setTimeout(r, 3000));
 
-  // 2. Get default branch SHA
-  const masterSha = await getDefaultBranchSha(ghApi, repoName);
-  if (!masterSha) {
-    throw new Error(`Repo ${repoName} created but could not get master SHA`);
-  }
+  // 2. Create initial commit with repo structure (orphan commit — no parent)
 
   // 3. Commit the initial structure
   const packageJson = {
@@ -679,7 +675,7 @@ jobs:
     { path: '.github/workflows/validate.yml', content: validateWorkflow },
   ];
 
-  // Use tree API to commit all files at once
+  // Use tree API to commit all files at once (orphan — no base_tree)
   const tree = files.map(f => ({
     path: f.path,
     mode: '100644',
@@ -688,19 +684,21 @@ jobs:
   }));
 
   const { data: treeData } = await ghApi('POST', `/repos/${ORG}/${repoName}/git/trees`, {
-    base_tree: masterSha,
     tree,
   });
   await new Promise(r => setTimeout(r, GITHUB_RATE_LIMIT_MS));
 
+  // Create orphan commit (no parents)
   const { data: newCommit } = await ghApi('POST', `/repos/${ORG}/${repoName}/git/commits`, {
     message: 'chore: initialize year repo structure',
     tree: treeData.sha,
-    parents: [masterSha],
+    parents: [],
   });
   await new Promise(r => setTimeout(r, GITHUB_RATE_LIMIT_MS));
 
-  await ghApi('PATCH', `/repos/${ORG}/${repoName}/git/refs/heads/master`, {
+  // Create master branch pointing to this commit
+  await ghApi('POST', `/repos/${ORG}/${repoName}/git/refs`, {
+    ref: 'refs/heads/master',
     sha: newCommit.sha,
   });
   await new Promise(r => setTimeout(r, GITHUB_RATE_LIMIT_MS));
