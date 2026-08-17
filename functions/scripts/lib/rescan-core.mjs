@@ -595,19 +595,23 @@ export async function rescanYear(options) {
     throw new Error(`Failed to create PR: ${prData.message || JSON.stringify(prData)}`);
   }
 
-  // Enable auto-merge
-  const autoMergeOk = await enableAutoMerge(ghApi, ghGraphQL, repo, prData.number);
+  // Merge directly (squash) — bot trusts its own PRs
   log(`PR created: ${repo}#${prData.number} (${prParts.join(' + ')})`);
-  log(`Auto-merge: ${autoMergeOk ? '✓ enabled' : '⚠ could not enable'}`);
-
-  // Trigger CI workflow on the PR branch (GitHub Apps don't auto-trigger workflows)
   try {
-    await ghApi('POST', `/repos/${ORG}/${repo}/actions/workflows/validate.yml/dispatches`, {
-      ref: branchName,
+    await new Promise(r => setTimeout(r, 1000)); // Brief pause before merge
+    const { ok: mergeOk } = await ghApi('PUT', `/repos/${ORG}/${repo}/pulls/${prData.number}/merge`, {
+      merge_method: 'squash',
+      commit_title: prTitle,
     });
-    log(`CI: ✓ workflow dispatched`);
-  } catch {
-    log(`CI: ⚠ could not dispatch workflow`);
+    if (mergeOk) {
+      log(`Merge: ✓ squash merged`);
+    } else {
+      // Fallback to auto-merge if direct merge is blocked
+      const autoMergeOk = await enableAutoMerge(ghApi, ghGraphQL, repo, prData.number);
+      log(`Merge: ⚠ direct merge blocked, auto-merge ${autoMergeOk ? 'enabled' : 'failed'}`);
+    }
+  } catch (err) {
+    log(`Merge: ⚠ ${err.message}`);
   }
   return {
     movies: newMovies.length,
