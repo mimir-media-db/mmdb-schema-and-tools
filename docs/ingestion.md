@@ -1,206 +1,133 @@
-# MMDB Ingestion Tool
+# MMDB Ingestion Pipeline
 
-Automated data ingestion from Wikidata to MMDB repositories.
+Automated data ingestion from Wikidata into MMDB year repositories via Firebase Cloud Functions.
 
-**⚠️ Note**: PR creation is currently disabled in all ingestion scripts for testing purposes. See "Enabling PR Creation" section below.
+## Overview
 
-## Setup
+The ingestion pipeline runs as serverless Cloud Functions with three scheduled jobs:
 
-1. Install dependencies:
-```bash
-npm install
-npm run build
+| Job | Schedule | Purpose |
+|-----|----------|---------|
+| `mmdbIngest` | Every 4 hours | Backlog fill (year-by-year, forward + backward) |
+| `mmdbIngestCurrentYear` | Nightly (2 AM) | Current year: full scan + catch-up pass |
+| `mmdbCleanupQIds` | Weekly (Sunday 4 AM) | Remove Q-ID / non-Latin entries from year repos |
+
+All jobs authenticate as `mimir-media-db[bot]` (GitHub App) and create auto-merged PRs.
+
+## Backlog Ingestion (`mmdbIngest`)
+
+Processes historical years sequentially:
+- **Forward pass**: 2010 → current year (100 titles/run)
+- **Backward pass**: 2009 → 1888 (100 titles/run)
+- **Recent pass**: 100 titles modified since last run
+- **People pass**: Cast/directors/producers from newly ingested movies
+
+State is stored in `mmdb-meta/ingestion/state.json`.
+
+## Current-Year Ingestion (`mmdbIngestCurrentYear`)
+
+Runs nightly with a dual-pass strategy:
+
+### Pass A: Full Dedup Scan
+
+Fetches all titles for the current year (up to 2000) and deduplicates against existing repos. This replaces the old offset-based pagination which could miss films added out-of-order.
+
+### Pass B: Recently Modified Catch-up
+
+Fetches titles modified in the last 48 hours (`RECENT_MODIFIED_HOURS`). Catches:
+- Films that received labels after initial ingestion attempt
+- Films with corrected publication dates
+- New films added to Wikidata since the last full scan
+
+Publication date (P577) is **not required** for the recent pass — films without dates are still caught if they were recently modified.
+
+### Why the dual-pass approach?
+
+The old offset-based pagination had a fundamental gap: if Wikidata added a film *between* offset positions already processed, it would never be picked up. The full scan + catch-up approach ensures completeness without relying on stable ordering.
+
+## Title Validation
+
+All ingestion paths reject entries that fail title validation before creating PRs:
+
+### Q-ID Rejection
+
+Titles matching `/^Q\d+$/i` (e.g., `Q140513842`) are Wikidata entities that have no human-readable label in any supported language. These are rejected immediately.
+
+### Non-Latin Title Filter (`isUsableTitle()`)
+
+Titles that produce unusable slugs are rejected. A title is unusable if:
+- It's empty or null
+- It's a Q-ID (see above)
+- After normalization (lowercase → NFD → strip diacritics → strip non-ASCII), the result is fewer than 2 characters
+
+This filters out Arabic-only, CJK-only, Cyrillic-only, and other titles that can't produce a meaningful Latin filename slug. These entries are still valid films — they just need a label in a supported language first.
+
+### Multi-Language Label Fallback
+
+SPARQL queries request labels in 12 languages (priority order):
+
+```
+en, es, fr, de, pt, it, ja, ko, zh, ar, hi, ru
 ```
 
-2. Set GitHub token:
-```bash
-export GITHUB_TOKEN=your_github_token
+Wikidata's label service returns the first available label in priority order. This dramatically reduces Q-ID entries compared to English-only queries.
+
+## Cleanup Cycle (`mmdbCleanupQIds`)
+
+Runs weekly (Sunday 4 AM) to catch entries that slipped through before the title filters were added:
+
+1. Scans the last `CLEANUP_YEAR_RANGE` (3) year repos
+2. Reads every movie/series JSON file
+3. Checks if title passes `isUsableTitle()`
+4. **Entries without external IDs** (no IMDb/TMDB): deleted via PR
+5. **Entries with external IDs**: logged for future re-resolution (not deleted)
+6. Creates one cleanup PR per repo with auto-merge enabled
+
+The cleanup function can also be triggered manually with the `cleanup-qids.mjs` script (see [functions/README.md](../functions/README.md#scripts)).
+
+## Data Flow
+
 ```
-
-## Usage
-
-### Ingest movies from a specific year
-
-```bash
-npm run ingest -- --year=2010 --limit=10
+Wikidata SPARQL → Title validation → Dedup check → Normalize → GitHub PR → Auto-merge
+                  (Q-ID + non-Latin)   (index + PRs)   (MMDB schema)
 ```
-
-### Parameters
-
-- `--year=YYYY` - Year to ingest (required)
-- `--limit=N` - Number of movies to add per PR (default: 10)
-
-## How it works
-
-1. Queries Wikidata for movies from specified year (fetches 3x limit to account for duplicates)
-2. **Checks GitHub for existing movies** (in master branch)
-3. **Checks GitHub for movies in pending PRs**
-4. Normalizes and validates data
-5. Collects exactly `limit` unique movies
-6. Creates branch and pull request
 
 ## Duplicate Prevention
 
-The tool **derives state from GitHub** instead of local files:
+Before adding any title, the pipeline checks:
 
-- **Master branch**: Checks `data/movies/index.json` for existing movies
-- **Pending PRs**: Scans all open PRs for movie files
+1. **Existing IDs** in the target repo's `index.json` (master branch)
+2. **IDs in open PRs** against the target repo
+3. **Intra-batch dedup** — prevents duplicate IDs within a single run
 
-This means:
-- ✅ No local state files to maintain
-- ✅ Works from any machine
-- ✅ Automatically syncs when PRs are merged
-- ✅ No manual cleanup needed
+## Configuration
 
-## Example Workflow
+Key constants in `functions/src/config.ts`:
 
-```bash
-# First run: add 10 movies from 2010
-npm run ingest -- --year=2010 --limit=10
-# Creates PR #1 with 10 movies
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `RECENT_LIMIT` | 100 | Titles per recent pass |
+| `BACKLOG_LIMIT` | 200 | Total backlog titles per run |
+| `CURRENT_YEAR_FULL_SCAN_LIMIT` | 2000 | Max titles in full dedup scan |
+| `RECENT_MODIFIED_HOURS` | 48 | Look-back window for catch-up pass |
+| `RECENT_MODIFIED_LIMIT` | 200 | Max recently modified titles |
+| `LABEL_LANGUAGES` | `en,es,fr,...,ru` | 12-language fallback for labels |
+| `CLEANUP_SCHEDULE` | `every sunday 04:00` | Weekly cleanup cron |
+| `CLEANUP_YEAR_RANGE` | 3 | Number of recent year repos to clean |
 
-# Second run: add 10 MORE movies (while PR #1 is pending)
-npm run ingest -- --year=2010 --limit=10
-# Creates PR #2 with 10 NEW movies (automatically skips the 10 from PR #1)
+## Manual Scripts
 
-# After PR #1 is merged, third run:
-npm run ingest -- --year=2010 --limit=10
-# Creates PR #3 with 10 NEW movies (automatically knows PR #1 was merged)
-```
+For ad-hoc operations outside the scheduled pipeline:
 
-Each run creates a separate PR with unique movies. No manual state management required!
+- **`cleanup-qids.mjs`** — Clean a specific repo on demand
+- **`rescan-year.mjs`** — Re-scan a historical year for missed films
 
-## People Ingestion
+See [functions/README.md](../functions/README.md#scripts) for usage.
 
-### Overview
+## Safeguards
 
-People ingestion fetches cast members, directors, and producers from movies already in MMDB repositories.
-
-### Usage
-
-```bash
-npm run ingest-people -- --limit=10
-```
-
-### Parameters
-
-- `--limit=N` - Number of people to add per PR (default: 10)
-
-### How it works
-
-1. **Fetches movie Wikidata IDs** from all year-based repos (mmdb-2010, mmdb-2011, etc.)
-2. **Queries Wikidata** for people associated with those movies:
-   - Cast members (P161)
-   - Directors (P57)
-   - Producers (P162)
-3. **Processes in batches** of 50 movies to avoid query size limits
-4. **Checks for duplicates** against existing people in master branch
-5. **Validates** each person against schema
-6. **Creates PR** with exactly `limit` unique people
-
-### Key Features
-
-- **Movie-based approach**: Only fetches people related to existing movies
-- **No timeouts**: Focused queries complete in <2 seconds
-- **Comprehensive**: Includes actors, directors, and producers
-- **English labels**: Filters for entities with English names
-- **Rate limiting**: 500ms delay between batch queries
-
-### Example
-
-```bash
-# Add 20 people from existing movies
-npm run ingest-people -- --limit=20
-
-# Output:
-# Found 8 movies with Wikidata IDs
-# Querying Wikidata for cast members (batch 1/1)...
-# Found 138 people in this batch
-# ✓ Will add M. Night Shyamalan (p_m_night_shyamalan)
-# ✓ Will add David Fincher (p_david_fincher)
-# ✓ Will add Andrew Garfield (p_andrew_garfield)
-# ...
-# Ready to add 20 people (0 skipped)
-```
-
-### Duplicate Prevention
-
-- Only checks against **merged people in master branch**
-- Does NOT check pending PRs (allows multiple PRs with same people)
-- Duplicates resolved during PR merge process
-
-## Series Ingestion
-
-### Overview
-
-Series ingestion fetches TV series from Wikidata by start year.
-
-### Usage
-
-```bash
-npm run ingest-series -- --year=2010 --limit=10
-```
-
-### Parameters
-
-- `--year=YYYY` - Year series started (required)
-- `--limit=N` - Number of series to add per PR (default: 10)
-
-### How it works
-
-1. **Queries Wikidata** for TV series that started in specified year
-2. **Filters for English labels** using rdfs:label
-3. **Checks for duplicates** against existing series in master branch
-4. **Validates** each series against schema
-5. **Creates PR** with exactly `limit` unique series
-
-### Key Features
-
-- **Year-based queries**: Fetches series by start year
-- **Fast queries**: Complete in <2 seconds
-- **Comprehensive data**: Includes seasons, episodes, IMDb/TMDB IDs
-- **English labels**: Filters for entities with English names
-- **Handles ongoing series**: Properly manages series without end dates
-
-### Example
-
-```bash
-# Add 10 series from 2020
-npm run ingest-series -- --year=2020 --limit=10
-
-# Output:
-# Found 30 series from Wikidata
-# ✓ Will add Breaking Bad (s_breaking_bad)
-# ✓ Will add Game of Thrones (s_game_of_thrones)
-# ✓ Will add The Simpsons (s_simpsons)
-# ...
-# Ready to add 10 series (0 skipped)
-```
-
-### Duplicate Prevention
-
-- Only checks against **merged series in master branch**
-- Does NOT check pending PRs
-- Duplicates resolved during PR merge process
-
----
-
-## Enabling PR Creation
-
-**Current Status**: PR creation is disabled in all scripts for testing.
-
-**To enable for production use:**
-
-1. **Movies** (`tools/src/ingest-from-wikidata.ts`):
-   - Find the TODO comment: `// TODO: Uncomment when ready for production`
-   - Uncomment the PR creation block
-
-2. **People** (`tools/src/ingest-people.ts`):
-   - Find the TODO comment: `// TODO: Uncomment when ready for production`
-   - Uncomment the PR creation block
-
-3. **Series** (`tools/src/ingest-series.ts`):
-   - Find the TODO comment: `// TODO: Uncomment when ready for production`
-   - Uncomment the PR creation block
-
-**Testing recommendation**: Test each script with `--limit=1` first to verify PR creation works correctly.
+- **Kill switch**: Set `INGESTION_PAUSED=true` to stop all scheduled runs
+- **Concurrency lock**: Only one function runs at a time (10-min timeout)
+- **Anomaly detection**: Aborts if Wikidata returns > 2000 results (likely bad query)
+- **Run timeout**: Graceful shutdown at 8 minutes (hard limit 9 min)
+- **Max empty runs**: Auto-pauses after 3 consecutive runs with zero results

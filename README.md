@@ -77,8 +77,10 @@ mmdb-schema-and-tools/          # This repo
 │   ├── src/
 │   │   ├── index.ts           # Cloud Function entry points
 │   │   └── ingestion/         # Wikidata SPARQL ingestion logic
+│   ├── scripts/               # Manual scripts (cleanup, rescan, etc.)
+│   │   └── lib/               # Shared helpers (GitHub App auth)
 │   ├── test/                  # Unit tests
-│   └── scripts/               # Manual trigger + setup scripts
+│   └── README.md              # Full deployment + script docs
 └── docs/                       # Documentation
 ```
 
@@ -100,9 +102,11 @@ New year repos are created automatically as the ingestion pipeline advances.
 The pipeline runs as Firebase Cloud Functions:
 
 - **6x daily** — Backlog pass (forward from 2010→now, backward from 2009→1888)
-- **Nightly** — Current year (2026) ingestion
-- **Source** — [Wikidata](https://www.wikidata.org/) SPARQL queries
+- **Nightly** — Current year full scan + 48h recently-modified catch-up
+- **Weekly** — Q-ID and non-Latin title cleanup (Sunday 4 AM)
+- **Source** — [Wikidata](https://www.wikidata.org/) SPARQL queries (12-language label fallback)
 - **Output** — Pull requests with auto-merge (squash)
+- **Title validation** — Q-ID rejection + non-Latin slug filter (`isUsableTitle()`)
 
 Safeguards: kill switch, concurrency lock, anomaly detection, title count sanity checks.
 
@@ -133,6 +137,20 @@ yarn ingest:local:live  # Create PRs
 ```
 
 See [functions/README.md](functions/README.md) for full deployment docs.
+
+### Scripts (Ad-hoc Operations)
+
+```bash
+# Re-scan a historical year for missed films
+node functions/scripts/rescan-year.mjs --year=2010 --dry-run
+node functions/scripts/rescan-year.mjs --year=2010 --include-series
+
+# Clean Q-ID and unusable entries from a specific repo
+node functions/scripts/cleanup-qids.mjs --repo=mmdb-2026 --dry-run
+node functions/scripts/cleanup-qids.mjs --repo=mmdb-2026
+```
+
+Scripts authenticate as `mimir-media-db[bot]` via GitHub App. See [functions/README.md](functions/README.md#scripts).
 
 ## Tech Stack
 

@@ -2,7 +2,7 @@
 
 > Bug tracking and issue resolution for the Mimir Media Database project.
 
-**Last Updated**: 2026-08-14
+**Last Updated**: 2026-08-16
 
 ---
 
@@ -36,7 +36,57 @@ None needed for duplicates. For genuine slug collisions, manual ingestion would 
 
 ## Resolved Issues
 
-No resolved issues yet.
+### Issue #2: Offset-based pagination gap in current-year ingestion
+
+**Status**: ✅ Resolved
+
+**Reported**: 2026-08-14
+
+**Component**: Ingestion
+
+**Description**:
+The current-year ingestion job used offset pagination to incrementally fetch new films. If Wikidata added a film to a position already passed by the offset, that film would never be ingested.
+
+**Impact**:
+- Missing films for the current year
+- No automatic recovery — gaps were permanent until manually re-scanned
+
+**Resolution**:
+Replaced offset pagination with a dual-pass strategy:
+- **Pass A**: Full dedup scan — fetches all titles for the current year and deduplicates against existing repos
+- **Pass B**: 48-hour recently-modified catch-up — catches films that received labels or date corrections
+
+The `rescan-year.mjs` script was also created for manual backfill of historical years affected by this gap.
+
+**Resolved**: 2026-08-16
+
+---
+
+### Issue #3: Q-ID entries polluting year repos
+
+**Status**: ✅ Resolved
+
+**Reported**: 2026-08-14
+
+**Component**: Ingestion
+
+**Description**:
+Wikidata entities without human-readable labels were being ingested with their Q-ID (e.g., `Q140513842`) as the title. This produced files like `q140513842-2026.json` with no useful metadata.
+
+**Impact**:
+- Polluted repos with meaningless entries
+- Inflated movie counts
+- Entries could never be matched to real films without external IDs
+
+**Resolution**:
+Three-layer fix:
+1. **Q-ID rejection filter** — Titles matching `/^Q\d+$/i` are rejected at ingestion time
+2. **Non-Latin title filter** — `isUsableTitle()` rejects titles that produce <2 Latin characters after normalization
+3. **Multi-language labels** — SPARQL queries now use 12 languages (`en,es,fr,de,pt,it,ja,ko,zh,ar,hi,ru`) reducing Q-ID entries by ~90%
+4. **Weekly cleanup cron** — `mmdbCleanupQIds` function removes entries that slipped through before the filters existed
+5. **Manual cleanup script** — `cleanup-qids.mjs` for on-demand repo cleaning
+
+**Resolved**: 2026-08-16
 
 ---
 
@@ -75,10 +125,10 @@ How the issue was fixed (for resolved issues).
 
 ## Known Limitations
 
-### Phase 1 (Current)
-- No automated ingestion yet (by design)
-- Manual data entry only
-- Limited to one test year repo (mmdb-2010)
+### Phase 2 (Current)
+- Non-Latin titles are rejected rather than transliterated (future improvement)
+- Q-ID entries with external IDs are logged but not auto-resolved (needs label re-fetching)
+- Cleanup only covers last 3 year repos per run (configurable via `CLEANUP_YEAR_RANGE`)
 
 ### Technical Debt
 None at this time.

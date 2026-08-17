@@ -15,7 +15,7 @@ Automated serverless pipeline that ingests movie, series, and people metadata fr
 │                                                                   │
 │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────┐  │
 │  │  Backlog Pass     │  │  Recent Pass      │  │ People Pass   │  │
-│  │  (200 titles/run) │  │  (40 titles/run)  │  │ (uncapped)    │  │
+│  │  (200 titles/run) │  │  (100 titles/run) │  │ (uncapped)    │  │
 │  │  Year-by-year     │  │  Modified since   │  │ From new      │  │
 │  │  sequential       │  │  last run         │  │ movies        │  │
 │  └────────┬─────────┘  └────────┬─────────┘  └──────┬───────┘  │
@@ -40,8 +40,8 @@ Automated serverless pipeline that ingests movie, series, and people metadata fr
 │   (GitHub repo)  │ │   (GitHub repo)  │ │   (GitHub repo)  │
 └──────────────────┘ └──────────────────┘ └──────────────────┘
 
-State: Firestore document at mmdb-ingestion/state
-Secrets: GITHUB_TOKEN via Secret Manager
+State: JSON file in mmdb-meta repo at ingestion/state.json
+Secrets: GitHub App credentials or GITHUB_TOKEN via Secret Manager
 ```
 
 ## Prerequisites
@@ -155,9 +155,10 @@ firebase functions:config:set mmdb.dry_run=true
 
 ### Daily Caps
 
-- **Backlog pass**: 200 titles (140 movies, 60 series)
-- **Recent pass**: 40 titles (28 movies, 12 series)
-- **Total cap**: 200 titles per run
+- **Backlog pass**: 200 titles (100 forward + 100 backward)
+- **Recent pass**: 100 titles
+- **Current year**: Full dedup scan (up to 2000) + 200 recently-modified catch-up
+- **Total cap**: 200 titles per backlog run
 - **People**: Uncapped (limited by associated movies)
 
 ### State Management
@@ -182,9 +183,9 @@ This function operates well within Firebase's free tier:
 
 | Resource | Free Tier | Expected Usage |
 |----------|-----------|----------------|
-| Cloud Functions invocations | 2M/month | ~180/month (6/day) |
-| Cloud Functions compute | 400K GB-sec | ~45 GB-sec/month |
-| Cloud Scheduler jobs | 3 free | 1 job |
+| Cloud Functions invocations | 2M/month | ~210/month (6/day + 1 nightly + 1 weekly) |
+| Cloud Functions compute | 400K GB-sec | ~50 GB-sec/month |
+| Cloud Scheduler jobs | 3 free | 3 jobs (backlog, current-year, cleanup) |
 | Outbound networking | 5GB/month | ~10MB/month |
 
 **Estimated monthly cost: $0** (within free tier limits)
@@ -217,14 +218,99 @@ functions/
 ├── tsconfig.json          # TypeScript config (strict mode, Node.js 20)
 ├── .gitignore             # Ignore dist/, node_modules/, env files
 ├── src/
-│   ├── index.ts           # Cloud Function entrypoint (onSchedule)
-│   ├── config.ts          # Constants: limits, cron, org name
+│   ├── index.ts           # Cloud Function entrypoints (4 functions)
+│   ├── config.ts          # Constants: limits, cron, org name, languages
 │   └── ingestion/
 │       ├── orchestrator.ts    # Dual-pass logic: backlog → recent → people
+│       ├── current-year.ts    # Full scan + recently-modified catch-up
+│       ├── cleanup.ts         # Q-ID and non-Latin title cleanup
 │       ├── wikidata-client.ts # SPARQL queries + HTTP client
 │       ├── github-client.ts   # Octokit: branches, PRs, file uploads
 │       ├── normalizer.ts      # Wikidata → MMDB format conversion
 │       ├── id-generator.ts    # Slug/ID generation (m_, s_, p_ prefixes)
-│       └── state.ts          # Firestore state read/write
+│       ├── safeguards.ts      # Kill switch, anomaly detection
+│       └── state.ts           # State read/write (mmdb-meta repo)
+├── scripts/
+│   ├── cleanup-qids.mjs      # Manual Q-ID cleanup for a specific repo
+│   ├── rescan-year.mjs        # Re-scan a year for missed films
+│   ├── ingest-dry.mjs         # Dry run trigger
+│   ├── ingest-now.mjs         # Live trigger
+│   ├── ingest-current-year.mjs # Trigger current-year job
+│   ├── setup-repos.mjs        # Repo scaffolding
+│   └── lib/
+│       └── github-app-auth.mjs # GitHub App authentication helper
 └── README.md              # This file
 ```
+
+## Cloud Functions
+
+| Function | Schedule | Purpose |
+|----------|----------|---------|
+| `mmdbIngest` | Every 4 hours | Backlog ingestion (forward + backward year sweep) |
+| `mmdbIngestCurrentYear` | Nightly (2 AM) | Full scan + 48h catch-up for current year |
+| `mmdbCleanupQIds` | Weekly (Sunday 4 AM) | Remove Q-ID and non-Latin title entries |
+| `mmdbIngestManual` | On-demand (HTTP) | Manual trigger via API key |
+
+## Title Validation
+
+All ingestion paths reject entries that fail title validation:
+
+- **Q-ID rejection**: Titles matching `/^Q\d+$/i` (e.g., `Q140513842`) are rejected
+- **Non-Latin filter**: Titles that produce unusable slugs (Arabic-only, CJK-only, etc.) are rejected via `isUsableTitle()`
+- Entries must produce a slug of at least 2 Latin characters
+
+## Multi-Language Labels
+
+SPARQL queries use a 12-language fallback for labels (in priority order):
+
+```
+en, es, fr, de, pt, it, ja, ko, zh, ar, hi, ru
+```
+
+This ensures titles are resolved even when no English label exists on Wikidata.
+
+## Scripts
+
+### cleanup-qids.mjs
+
+Scans a year repo for entries with Q-ID titles or non-Latin-only titles and creates a cleanup PR.
+
+```bash
+# Dry run — see what would be deleted
+node functions/scripts/cleanup-qids.mjs --repo=mmdb-2026 --dry-run
+
+# Live — create PR to delete unusable entries
+node functions/scripts/cleanup-qids.mjs --repo=mmdb-2026
+```
+
+Only deletes entries without external IDs (IMDb/TMDB). Entries with external IDs are logged for future re-resolution.
+
+### rescan-year.mjs
+
+Re-scans a specific historical year for films that were missed during the original backlog pass (e.g., films added to Wikidata after the offset already passed them).
+
+```bash
+# Dry run — see what new films exist
+node functions/scripts/rescan-year.mjs --year=2010 --dry-run
+
+# Live — create ingestion PR with missed films
+node functions/scripts/rescan-year.mjs --year=2010
+
+# Custom limit + include series
+node functions/scripts/rescan-year.mjs --year=2010 --limit=3000 --include-series
+```
+
+Options:
+- `--year=YYYY` — Target year (required)
+- `--dry-run` — Preview without creating PR
+- `--limit=N` — Max Wikidata results (default: 2000)
+- `--include-series` — Also rescan series
+
+### Authentication
+
+Scripts authenticate as the `mimir-media-db[bot]` GitHub App by default (via `scripts/lib/github-app-auth.mjs`). Falls back to `GITHUB_TOKEN` PAT if App credentials aren't configured.
+
+Required env vars (in `functions/.env`):
+- `GITHUB_APP_ID`
+- `GITHUB_APP_PRIVATE_KEY`
+- `GITHUB_APP_INSTALLATION_ID`
