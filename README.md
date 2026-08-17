@@ -145,12 +145,16 @@ See [functions/README.md](functions/README.md) for full deployment docs.
 node functions/scripts/rescan-year.mjs --year=2010 --dry-run
 node functions/scripts/rescan-year.mjs --year=2010 --include-series
 
+# Bulk-fill all years (creates repos as needed)
+node functions/scripts/bulk-fill.mjs --from=1920 --to=2026 --include-series
+node functions/scripts/bulk-fill.mjs --from=2000 --to=2010 --include-series --resume
+
 # Clean Q-ID and unusable entries from a specific repo
 node functions/scripts/cleanup-qids.mjs --repo=mmdb-2026 --dry-run
 node functions/scripts/cleanup-qids.mjs --repo=mmdb-2026
 ```
 
-Scripts authenticate as `mimir-media-db[bot]` via GitHub App. See [functions/README.md](functions/README.md#scripts).
+Scripts authenticate as `mimir-media-db[bot]` via GitHub App. PRs are created for audit trail, then immediately squash-merged. CI builds indexes post-merge using App token to bypass branch protection. See [functions/README.md](functions/README.md#scripts).
 
 ## Tech Stack
 

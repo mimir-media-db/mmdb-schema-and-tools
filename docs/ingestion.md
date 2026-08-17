@@ -12,7 +12,7 @@ The ingestion pipeline runs as serverless Cloud Functions with three scheduled j
 | `mmdbIngestCurrentYear` | Nightly (2 AM) | Current year: full scan + catch-up pass |
 | `mmdbCleanupQIds` | Weekly (Sunday 4 AM) | Remove Q-ID / non-Latin entries from year repos |
 
-All jobs authenticate as `mimir-media-db[bot]` (GitHub App) and create auto-merged PRs.
+All jobs authenticate as `mimir-media-db[bot]` (GitHub App) and create PRs that are immediately squash-merged by the bot.
 
 ## Backlog Ingestion (`mmdbIngest`)
 
@@ -81,14 +81,14 @@ Runs weekly (Sunday 4 AM) to catch entries that slipped through before the title
 3. Checks if title passes `isUsableTitle()`
 4. **Entries without external IDs** (no IMDb/TMDB): deleted via PR
 5. **Entries with external IDs**: logged for future re-resolution (not deleted)
-6. Creates one cleanup PR per repo with auto-merge enabled
+6. Creates one cleanup PR per repo, squash-merges immediately
 
 The cleanup function can also be triggered manually with the `cleanup-qids.mjs` script (see [functions/README.md](../functions/README.md#scripts)).
 
 ## Data Flow
 
 ```
-Wikidata SPARQL → Title validation → Dedup check → Normalize → GitHub PR → Auto-merge
+Wikidata SPARQL → Title validation → Dedup check → Normalize → GitHub PR → Direct merge → CI builds indexes
                   (Q-ID + non-Latin)   (index + PRs)   (MMDB schema)
 ```
 
