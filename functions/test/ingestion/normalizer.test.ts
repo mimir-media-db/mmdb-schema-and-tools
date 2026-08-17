@@ -68,6 +68,184 @@ describe('Normalizer', () => {
     });
   });
 
+  describe('normalizeMovie — IMDb ID validation', () => {
+    it('should store valid tt-prefixed IMDb ID on movie', () => {
+      const movie: WikidataMovie = {
+        id: '',
+        label: 'Test Film',
+        year: 2020,
+        imdbId: 'tt1234567',
+        wikidataId: 'Q111',
+      };
+      const result = normalizeMovie(movie);
+      assert.strictEqual(result.external_ids.imdb, 'tt1234567');
+    });
+
+    it('should discard nm-prefixed IMDb ID on movie (wrong type)', () => {
+      const movie: WikidataMovie = {
+        id: '',
+        label: 'Test Film',
+        year: 2020,
+        imdbId: 'nm1627110',
+        wikidataId: 'Q111',
+      };
+      const result = normalizeMovie(movie);
+      assert.strictEqual(result.external_ids.imdb, undefined);
+    });
+
+    it('should discard co-prefixed IMDb ID on movie (company ID)', () => {
+      const movie: WikidataMovie = {
+        id: '',
+        label: 'Test Film',
+        year: 2020,
+        imdbId: 'co1234567',
+        wikidataId: 'Q111',
+      };
+      const result = normalizeMovie(movie);
+      assert.strictEqual(result.external_ids.imdb, undefined);
+    });
+
+    it('should discard empty string IMDb ID on movie', () => {
+      const movie: WikidataMovie = {
+        id: '',
+        label: 'Test Film',
+        year: 2020,
+        imdbId: '',
+        wikidataId: 'Q111',
+      };
+      const result = normalizeMovie(movie);
+      assert.strictEqual(result.external_ids.imdb, undefined);
+    });
+
+    it('should not set imdb field when imdbId is undefined', () => {
+      const movie: WikidataMovie = {
+        id: '',
+        label: 'Test Film',
+        year: 2020,
+        wikidataId: 'Q111',
+      };
+      const result = normalizeMovie(movie);
+      assert.strictEqual(result.external_ids.imdb, undefined);
+    });
+  });
+
+  describe('normalizePerson — IMDb ID validation', () => {
+    it('should store valid nm-prefixed IMDb ID on person', () => {
+      const person: WikidataPerson = {
+        id: '',
+        label: 'Test Person',
+        imdbId: 'nm1234567',
+        wikidataId: 'Q222',
+      };
+      const result = normalizePerson(person);
+      assert.strictEqual(result.external_ids.imdb, 'nm1234567');
+    });
+
+    it('should discard tt-prefixed IMDb ID on person (wrong type)', () => {
+      const person: WikidataPerson = {
+        id: '',
+        label: 'Test Person',
+        imdbId: 'tt1234567',
+        wikidataId: 'Q222',
+      };
+      const result = normalizePerson(person);
+      assert.strictEqual(result.external_ids.imdb, undefined);
+    });
+
+    it('should discard co-prefixed IMDb ID on person (company ID)', () => {
+      const person: WikidataPerson = {
+        id: '',
+        label: 'Test Person',
+        imdbId: 'co1234567',
+        wikidataId: 'Q222',
+      };
+      const result = normalizePerson(person);
+      assert.strictEqual(result.external_ids.imdb, undefined);
+    });
+
+    it('should discard empty string IMDb ID on person', () => {
+      const person: WikidataPerson = {
+        id: '',
+        label: 'Test Person',
+        imdbId: '',
+        wikidataId: 'Q222',
+      };
+      const result = normalizePerson(person);
+      assert.strictEqual(result.external_ids.imdb, undefined);
+    });
+
+    it('should not set imdb field when imdbId is undefined on person', () => {
+      const person: WikidataPerson = {
+        id: '',
+        label: 'Test Person',
+        wikidataId: 'Q222',
+      };
+      const result = normalizePerson(person);
+      assert.strictEqual(result.external_ids.imdb, undefined);
+    });
+  });
+
+  describe('normalizeSeries — IMDb ID validation', () => {
+    it('should store valid tt-prefixed IMDb ID on series', () => {
+      const series: WikidataSeries = {
+        id: '',
+        label: 'Test Series',
+        startYear: 2020,
+        imdbId: 'tt1234567',
+        wikidataId: 'Q333',
+      };
+      const result = normalizeSeries(series);
+      assert.strictEqual(result.external_ids.imdb, 'tt1234567');
+    });
+
+    it('should discard nm-prefixed IMDb ID on series (wrong type)', () => {
+      const series: WikidataSeries = {
+        id: '',
+        label: 'Test Series',
+        startYear: 2020,
+        imdbId: 'nm1627110',
+        wikidataId: 'Q333',
+      };
+      const result = normalizeSeries(series);
+      assert.strictEqual(result.external_ids.imdb, undefined);
+    });
+
+    it('should discard co-prefixed IMDb ID on series (company ID)', () => {
+      const series: WikidataSeries = {
+        id: '',
+        label: 'Test Series',
+        startYear: 2020,
+        imdbId: 'co1234567',
+        wikidataId: 'Q333',
+      };
+      const result = normalizeSeries(series);
+      assert.strictEqual(result.external_ids.imdb, undefined);
+    });
+
+    it('should discard empty string IMDb ID on series', () => {
+      const series: WikidataSeries = {
+        id: '',
+        label: 'Test Series',
+        startYear: 2020,
+        imdbId: '',
+        wikidataId: 'Q333',
+      };
+      const result = normalizeSeries(series);
+      assert.strictEqual(result.external_ids.imdb, undefined);
+    });
+
+    it('should not set imdb field when imdbId is undefined on series', () => {
+      const series: WikidataSeries = {
+        id: '',
+        label: 'Test Series',
+        startYear: 2020,
+        wikidataId: 'Q333',
+      };
+      const result = normalizeSeries(series);
+      assert.strictEqual(result.external_ids.imdb, undefined);
+    });
+  });
+
   describe('normalizePerson', () => {
     it('should map birth_year and death_year correctly', () => {
       const person: WikidataPerson = {

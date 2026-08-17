@@ -367,7 +367,7 @@ function normalizeMovie(wikiMovie) {
 
   if (wikiMovie.releaseDate) movie.release_date = wikiMovie.releaseDate;
   if (wikiMovie.runtime) movie.runtime_minutes = wikiMovie.runtime;
-  if (wikiMovie.imdbId) movie.external_ids.imdb = wikiMovie.imdbId;
+  if (wikiMovie.imdbId && /^tt\d+$/.test(wikiMovie.imdbId)) movie.external_ids.imdb = wikiMovie.imdbId;
   if (wikiMovie.tmdbId) movie.external_ids.tmdb = wikiMovie.tmdbId;
 
   return movie;
@@ -391,7 +391,7 @@ function normalizeSeries(wikiSeries) {
 
   if (wikiSeries.totalSeasons) series.total_seasons = wikiSeries.totalSeasons;
   if (wikiSeries.totalEpisodes) series.total_episodes = wikiSeries.totalEpisodes;
-  if (wikiSeries.imdbId) series.external_ids.imdb = wikiSeries.imdbId;
+  if (wikiSeries.imdbId && /^tt\d+$/.test(wikiSeries.imdbId)) series.external_ids.imdb = wikiSeries.imdbId;
   if (wikiSeries.tmdbId) series.external_ids.tmdb = wikiSeries.tmdbId;
 
   return series;

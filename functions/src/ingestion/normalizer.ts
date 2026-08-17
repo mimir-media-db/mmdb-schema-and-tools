@@ -91,7 +91,7 @@ export function normalizeMovie(wikiMovie: WikidataMovie): MMDBMovie {
     movie.runtime_minutes = wikiMovie.runtime;
   }
 
-  if (wikiMovie.imdbId) {
+  if (wikiMovie.imdbId && /^tt\d+$/.test(wikiMovie.imdbId)) {
     movie.external_ids.imdb = wikiMovie.imdbId;
   }
 
@@ -126,7 +126,7 @@ export function normalizePerson(wikiPerson: WikidataPerson): MMDBPerson {
     person.death_year = null;
   }
 
-  if (wikiPerson.imdbId) {
+  if (wikiPerson.imdbId && /^nm\d+$/.test(wikiPerson.imdbId)) {
     person.external_ids.imdb = wikiPerson.imdbId;
   }
 
@@ -166,7 +166,7 @@ export function normalizeSeries(wikiSeries: WikidataSeries): MMDBSeries {
     series.total_episodes = wikiSeries.totalEpisodes;
   }
 
-  if (wikiSeries.imdbId) {
+  if (wikiSeries.imdbId && /^tt\d+$/.test(wikiSeries.imdbId)) {
     series.external_ids.imdb = wikiSeries.imdbId;
   }
 
