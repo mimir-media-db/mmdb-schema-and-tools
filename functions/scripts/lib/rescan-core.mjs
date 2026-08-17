@@ -605,6 +605,12 @@ export async function rescanYear(options) {
     });
     if (mergeOk) {
       log(`Merge: ✓ squash merged`);
+      // Dispatch workflow to build indexes (push from App token doesn't trigger workflows)
+      await new Promise(r => setTimeout(r, 1000));
+      const { ok: dispatchOk } = await ghApi('POST', `/repos/${ORG}/${repo}/actions/workflows/validate.yml/dispatches`, {
+        ref: 'master',
+      });
+      log(`CI: ${dispatchOk ? '✓ index build dispatched' : '⚠ could not dispatch (workflow_dispatch may not be configured)'}`);
     } else {
       // Fallback to auto-merge if direct merge is blocked
       const autoMergeOk = await enableAutoMerge(ghApi, ghGraphQL, repo, prData.number);
