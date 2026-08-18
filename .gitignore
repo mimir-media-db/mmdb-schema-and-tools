@@ -12,5 +12,8 @@ build/
 .envrc
 .ingestion-state.json
 bulk-fill-results.json
+bulk-rescan-results.json
+bulk-people-results.json
+bulk-people-progress.json
 tools/**/*.js
 tools/**/*.d.ts

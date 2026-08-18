@@ -20,7 +20,7 @@
  *   --dry-run         Show plan without executing
  *   --resume          Skip years with existing rescan branches
  *   --delay=N         Seconds between years (default: 10)
- *   --limit=N         Wikidata query limit per year (default: 2000)
+ *   --limit=N         Page size for paginated Wikidata queries (default: 2000)
  *
  * Environment:
  *   GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY + GITHUB_APP_INSTALLATION_ID
@@ -62,7 +62,7 @@ Options:
   --dry-run          Show plan without executing
   --resume           Skip years that already have a recent rescan branch
   --delay=N          Seconds to wait between years (default: 10)
-  --limit=N          Wikidata query limit per year (default: 2000)
+  --limit=N          Page size for paginated Wikidata queries (default: 2000)
 
 Examples:
   node scripts/bulk-fill.mjs --from=1920 --to=2026 --include-series

@@ -37,6 +37,46 @@ export function isUsableTitle(title) {
   return slug.length >= 2;
 }
 
+// ─── Retry helper ────────────────────────────────────────────────────────────
+
+/**
+ * Retry a GitHub API call on 5xx errors or network failures.
+ * Does NOT retry on 4xx client errors (those are real failures).
+ *
+ * @param {function} fn - Async function that returns {ok, status, data}
+ * @param {object} [opts]
+ * @param {number} [opts.maxAttempts=5] - Max attempts
+ * @param {number} [opts.baseDelay=5000] - Base delay in ms (doubles each retry)
+ * @param {number} [opts.maxDelay=60000] - Maximum delay cap in ms
+ * @param {function} [opts.log=console.log] - Logger
+ * @returns {Promise<{ok, status, data}>}
+ */
+export async function retryOnServerError(fn, opts = {}) {
+  const { maxAttempts = 5, baseDelay = 5000, maxDelay = 60000, log = console.log } = opts;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const result = await fn();
+      if (result.ok || (result.status && result.status < 500)) return result;
+      // 5xx — retry
+      if (attempt < maxAttempts) {
+        const delay = Math.min(baseDelay * Math.pow(2, attempt - 1), maxDelay);
+        log(`  ⚠ GitHub 5xx (${result.status}) — retrying in ${delay / 1000}s (${attempt}/${maxAttempts})`);
+        await new Promise(r => setTimeout(r, delay));
+      } else {
+        return result; // Last attempt, return whatever we got
+      }
+    } catch (err) {
+      if (attempt < maxAttempts) {
+        const delay = Math.min(baseDelay * Math.pow(2, attempt - 1), maxDelay);
+        log(`  ⚠ Network error: ${err.message} — retrying in ${delay / 1000}s (${attempt}/${maxAttempts})`);
+        await new Promise(r => setTimeout(r, delay));
+      } else {
+        throw err;
+      }
+    }
+  }
+}
+
 // ─── GitHub API helpers ──────────────────────────────────────────────────────
 
 export function createGitHubClient(token) {
@@ -83,19 +123,23 @@ export async function getDefaultBranchSha(ghApi, repo) {
 }
 
 export async function createBranch(ghApi, repo, branchName, sha) {
-  return ghApi('POST', `/repos/${ORG}/${repo}/git/refs`, {
-    ref: `refs/heads/${branchName}`,
-    sha,
-  });
+  return retryOnServerError(
+    () => ghApi('POST', `/repos/${ORG}/${repo}/git/refs`, {
+      ref: `refs/heads/${branchName}`,
+      sha,
+    }),
+  );
 }
 
 export async function createPR(ghApi, repo, title, head, body) {
-  return ghApi('POST', `/repos/${ORG}/${repo}/pulls`, {
-    title,
-    head,
-    base: 'master',
-    body,
-  });
+  return retryOnServerError(
+    () => ghApi('POST', `/repos/${ORG}/${repo}/pulls`, {
+      title,
+      head,
+      base: 'master',
+      body,
+    }),
+  );
 }
 
 export async function enableAutoMerge(ghApi, ghGraphQL, repo, prNumber) {
@@ -158,7 +202,7 @@ export async function getIdsInPendingPRs(ghApi, repo, dir) {
 
 // ─── Wikidata helpers ────────────────────────────────────────────────────────
 
-export function buildMovieQuery(targetYear, queryLimit) {
+export function buildMovieQuery(targetYear, queryLimit, offset = 0) {
   return `
 SELECT DISTINCT ?film ?filmLabel ?year ?imdb ?tmdb ?releaseDate ?runtime
 WHERE {
@@ -175,10 +219,11 @@ WHERE {
 }
 ORDER BY ?releaseDate
 LIMIT ${queryLimit}
+OFFSET ${offset}
 `.trim();
 }
 
-export function buildSeriesQuery(targetYear, queryLimit) {
+export function buildSeriesQuery(targetYear, queryLimit, offset = 0) {
   return `
 SELECT DISTINCT ?series ?seriesLabel ?startDate ?endDate ?imdb ?tmdb ?seasons ?episodes
 WHERE {
@@ -198,6 +243,7 @@ WHERE {
 }
 ORDER BY ?seriesLabel
 LIMIT ${queryLimit}
+OFFSET ${offset}
 `.trim();
 }
 
@@ -220,6 +266,44 @@ export async function queryWikidata(sparql) {
   }
 
   return response.json();
+}
+
+/**
+ * Paginated Wikidata query helper.
+ *
+ * Loops with increasing OFFSET until a page returns fewer results than pageSize,
+ * then returns merged results with all bindings combined.
+ *
+ * @param {function} queryBuilder - Function(offset, limit) that returns a SPARQL query string
+ * @param {number} [pageSize=2000] - Results per page
+ * @param {function} [log=console.log] - Logger function
+ * @returns {Promise<{results: {bindings: Array}, pages: number, total: number}>}
+ */
+export async function queryWikidataPaginated(queryBuilder, pageSize = 2000, log = console.log) {
+  const allBindings = [];
+  let page = 0;
+
+  while (true) {
+    const offset = page * pageSize;
+    const sparql = queryBuilder(offset, pageSize);
+    const result = await queryWikidata(sparql);
+    const bindings = result.results?.bindings || [];
+
+    allBindings.push(...bindings);
+    page++;
+
+    log(`  Page ${page}: ${bindings.length} results (offset=${offset})`);
+
+    if (bindings.length < pageSize) {
+      break;
+    }
+  }
+
+  return {
+    results: { bindings: allBindings },
+    pages: page,
+    total: allBindings.length,
+  };
 }
 
 export function parseMovieResults(results) {
@@ -339,11 +423,15 @@ export function getSeriesFilePath(series) {
 // ─── Batch Commit (Git Trees API) ────────────────────────────────────────────
 
 async function commitBatchInternal(ghApi, targetRepo, branch, files, message) {
-  const { data: refData } = await ghApi('GET', `/repos/${ORG}/${targetRepo}/git/ref/heads/${branch}`);
+  const { data: refData } = await retryOnServerError(
+    () => ghApi('GET', `/repos/${ORG}/${targetRepo}/git/ref/heads/${branch}`)
+  );
   const commitSha = refData.object.sha;
   await new Promise(r => setTimeout(r, GITHUB_RATE_LIMIT_MS));
 
-  const { data: commitData } = await ghApi('GET', `/repos/${ORG}/${targetRepo}/git/commits/${commitSha}`);
+  const { data: commitData } = await retryOnServerError(
+    () => ghApi('GET', `/repos/${ORG}/${targetRepo}/git/commits/${commitSha}`)
+  );
   const baseTreeSha = commitData.tree.sha;
   await new Promise(r => setTimeout(r, GITHUB_RATE_LIMIT_MS));
 
@@ -354,22 +442,28 @@ async function commitBatchInternal(ghApi, targetRepo, branch, files, message) {
     content: f.content,
   }));
 
-  const { data: treeData } = await ghApi('POST', `/repos/${ORG}/${targetRepo}/git/trees`, {
-    base_tree: baseTreeSha,
-    tree,
-  });
+  const { data: treeData } = await retryOnServerError(
+    () => ghApi('POST', `/repos/${ORG}/${targetRepo}/git/trees`, {
+      base_tree: baseTreeSha,
+      tree,
+    })
+  );
   await new Promise(r => setTimeout(r, GITHUB_RATE_LIMIT_MS));
 
-  const { data: newCommit } = await ghApi('POST', `/repos/${ORG}/${targetRepo}/git/commits`, {
-    message,
-    tree: treeData.sha,
-    parents: [commitSha],
-  });
+  const { data: newCommit } = await retryOnServerError(
+    () => ghApi('POST', `/repos/${ORG}/${targetRepo}/git/commits`, {
+      message,
+      tree: treeData.sha,
+      parents: [commitSha],
+    })
+  );
   await new Promise(r => setTimeout(r, GITHUB_RATE_LIMIT_MS));
 
-  await ghApi('PATCH', `/repos/${ORG}/${targetRepo}/git/refs/heads/${branch}`, {
-    sha: newCommit.sha,
-  });
+  await retryOnServerError(
+    () => ghApi('PATCH', `/repos/${ORG}/${targetRepo}/git/refs/heads/${branch}`, {
+      sha: newCommit.sha,
+    })
+  );
   await new Promise(r => setTimeout(r, GITHUB_RATE_LIMIT_MS));
 }
 
@@ -411,11 +505,14 @@ export function groupByFirstLetter(items) {
 /**
  * Rescan a single year for movies (and optionally series).
  *
+ * Uses paginated Wikidata queries to retrieve all results (not capped at a
+ * single page). The `limit` parameter controls page size for pagination.
+ *
  * @param {object} options
  * @param {number} options.year - Target year to rescan
  * @param {string} options.repo - Target repo name (e.g. 'mmdb-2010')
  * @param {string} options.token - GitHub auth token
- * @param {number} [options.limit=2000] - Max Wikidata results per query
+ * @param {number} [options.limit=2000] - Page size for paginated Wikidata queries
  * @param {boolean} [options.includeSeries=false] - Also rescan series
  * @param {boolean} [options.dryRun=false] - Don't create PR, just report
  * @param {function} [options.log] - Log function (default: console.log)
@@ -435,15 +532,15 @@ export async function rescanYear(options) {
   const { ghApi, ghGraphQL } = createGitHubClient(token);
   const runDate = new Date().toISOString().split('T')[0].replace(/-/g, '');
 
-  // ─── Query Wikidata for films ──────────────────────────────────────────────
+  // ─── Query Wikidata for films (paginated) ───────────────────────────────────
 
-  const movieSparql = buildMovieQuery(year, limit);
-  const movieResults = await queryWikidata(movieSparql);
+  log(`Querying Wikidata for movies (year=${year}, pageSize=${limit})...`);
+  const movieResults = await queryWikidataPaginated(
+    (offset, pageSize) => buildMovieQuery(year, pageSize, offset),
+    limit,
+    log,
+  );
   const rawMovies = parseMovieResults(movieResults);
-
-  if (rawMovies.length >= MAX_RESULTS_SANITY) {
-    throw new Error(`Got ${rawMovies.length} results — exceeds sanity limit of ${MAX_RESULTS_SANITY}`);
-  }
 
   const unusableMovies = rawMovies.filter(m => !isUsableTitle(m.label));
   const validMovies = rawMovies.filter(m => isUsableTitle(m.label));
@@ -455,13 +552,13 @@ export async function rescanYear(options) {
   let validSeries = [];
 
   if (includeSeries) {
-    const seriesSparql = buildSeriesQuery(year, limit);
-    const seriesResults = await queryWikidata(seriesSparql);
+    log(`Querying Wikidata for series (year=${year}, pageSize=${limit})...`);
+    const seriesResults = await queryWikidataPaginated(
+      (offset, pageSize) => buildSeriesQuery(year, pageSize, offset),
+      limit,
+      log,
+    );
     rawSeries = parseSeriesResults(seriesResults);
-
-    if (rawSeries.length >= MAX_RESULTS_SANITY) {
-      throw new Error(`Got ${rawSeries.length} series results — exceeds sanity limit of ${MAX_RESULTS_SANITY}`);
-    }
 
     qidSeries = rawSeries.filter(s => !isUsableTitle(s.label));
     validSeries = rawSeries.filter(s => isUsableTitle(s.label));
@@ -603,10 +700,12 @@ export async function rescanYear(options) {
   log(`PR created: ${repo}#${prData.number} (${prParts.join(' + ')})`);
   try {
     await new Promise(r => setTimeout(r, 1000)); // Brief pause before merge
-    const { ok: mergeOk } = await ghApi('PUT', `/repos/${ORG}/${repo}/pulls/${prData.number}/merge`, {
-      merge_method: 'squash',
-      commit_title: prTitle,
-    });
+    const { ok: mergeOk } = await retryOnServerError(
+      () => ghApi('PUT', `/repos/${ORG}/${repo}/pulls/${prData.number}/merge`, {
+        merge_method: 'squash',
+        commit_title: prTitle,
+      }),
+    );
     if (mergeOk) {
       log(`Merge: ✓ squash merged`);
       // Dispatch workflow to build indexes (push from App token doesn't trigger workflows)
@@ -638,7 +737,9 @@ export async function rescanYear(options) {
  * Check if a repo exists in the org.
  */
 export async function repoExists(ghApi, repo) {
-  const { ok } = await ghApi('GET', `/repos/${ORG}/${repo}`);
+  const { ok } = await retryOnServerError(
+    () => ghApi('GET', `/repos/${ORG}/${repo}`),
+  );
   return ok;
 }
 
@@ -646,7 +747,9 @@ export async function repoExists(ghApi, repo) {
  * Check if a recent rescan branch exists (for --resume).
  */
 export async function hasRecentRescanBranch(ghApi, repo, year) {
-  const { ok, data } = await ghApi('GET', `/repos/${ORG}/${repo}/git/matching-refs/heads/mmdb-ingest/rescan-${year}-`);
+  const { ok, data } = await retryOnServerError(
+    () => ghApi('GET', `/repos/${ORG}/${repo}/git/matching-refs/heads/mmdb-ingest/rescan-${year}-`),
+  );
   if (!ok || !Array.isArray(data)) return false;
   return data.length > 0;
 }
@@ -658,20 +761,22 @@ export async function createYearRepo(ghApi, year) {
   const repoName = `mmdb-${year}`;
 
   // 1. Create the repo with auto_init (creates 'main' branch with README)
-  const { ok, data } = await ghApi('POST', `/orgs/${ORG}/repos`, {
-    name: repoName,
-    description: `MMDB ${year} — Movies and series from ${year}`,
-    visibility: 'public',
-    auto_init: true,
-    has_issues: true,
-    has_projects: false,
-    has_wiki: false,
-    allow_squash_merge: true,
-    allow_merge_commit: false,
-    allow_rebase_merge: false,
-    delete_branch_on_merge: true,
-    allow_auto_merge: true,
-  });
+  const { ok, data } = await retryOnServerError(
+    () => ghApi('POST', `/orgs/${ORG}/repos`, {
+      name: repoName,
+      description: `MMDB ${year} — Movies and series from ${year}`,
+      visibility: 'public',
+      auto_init: true,
+      has_issues: true,
+      has_projects: false,
+      has_wiki: false,
+      allow_squash_merge: true,
+      allow_merge_commit: false,
+      allow_rebase_merge: false,
+      delete_branch_on_merge: true,
+      allow_auto_merge: true,
+    }),
+  );
 
   if (!ok) {
     throw new Error(`Failed to create repo ${repoName}: ${data.message || JSON.stringify(data)}`);
@@ -681,9 +786,11 @@ export async function createYearRepo(ghApi, year) {
   await new Promise(r => setTimeout(r, 5000));
 
   // 2. Rename default branch from 'main' to 'master'
-  await ghApi('POST', `/repos/${ORG}/${repoName}/branches/main/rename`, {
-    new_name: 'master',
-  });
+  await retryOnServerError(
+    () => ghApi('POST', `/repos/${ORG}/${repoName}/branches/main/rename`, {
+      new_name: 'master',
+    }),
+  );
 
   // Wait for rename to propagate
   await new Promise(r => setTimeout(r, 3000));
@@ -792,18 +899,22 @@ jobs:
   for (const file of files) {
     let sha;
     try {
-      const { ok: getOk, data: getData } = await ghApi('GET', `/repos/${ORG}/${repoName}/contents/${file.path}?ref=master`);
+      const { ok: getOk, data: getData } = await retryOnServerError(
+        () => ghApi('GET', `/repos/${ORG}/${repoName}/contents/${file.path}?ref=master`),
+      );
       if (getOk && getData.sha) {
         sha = getData.sha;
       }
     } catch { /* file doesn't exist yet */ }
 
-    const { ok: putOk, data: putData } = await ghApi('PUT', `/repos/${ORG}/${repoName}/contents/${file.path}`, {
-      message: `chore: initialize ${file.path}`,
-      content: Buffer.from(file.content).toString('base64'),
-      branch: 'master',
-      ...(sha && { sha }),
-    });
+    const { ok: putOk, data: putData } = await retryOnServerError(
+      () => ghApi('PUT', `/repos/${ORG}/${repoName}/contents/${file.path}`, {
+        message: `chore: initialize ${file.path}`,
+        content: Buffer.from(file.content).toString('base64'),
+        branch: 'master',
+        ...(sha && { sha }),
+      }),
+    );
     if (!putOk) {
       console.warn(`  ⚠ Failed to push ${file.path}: ${putData.message || JSON.stringify(putData)}`);
     }
@@ -811,21 +922,25 @@ jobs:
   }
 
   // 4. Set up branch protection
-  await ghApi('PUT', `/repos/${ORG}/${repoName}/branches/master/protection`, {
-    required_status_checks: {
-      strict: false,
-      contexts: ['validate'],
-    },
-    enforce_admins: false,
-    required_pull_request_reviews: null,
-    restrictions: null,
-  });
+  await retryOnServerError(
+    () => ghApi('PUT', `/repos/${ORG}/${repoName}/branches/master/protection`, {
+      required_status_checks: {
+        strict: false,
+        contexts: ['validate'],
+      },
+      enforce_admins: false,
+      required_pull_request_reviews: null,
+      restrictions: null,
+    }),
+  );
 
   // 5. Set workflow permissions
-  await ghApi('PUT', `/repos/${ORG}/${repoName}/actions/permissions/workflow`, {
-    default_workflow_permissions: 'write',
-    can_approve_pull_request_reviews: true,
-  });
+  await retryOnServerError(
+    () => ghApi('PUT', `/repos/${ORG}/${repoName}/actions/permissions/workflow`, {
+      default_workflow_permissions: 'write',
+      can_approve_pull_request_reviews: true,
+    }),
+  );
 
   return repoName;
 }
