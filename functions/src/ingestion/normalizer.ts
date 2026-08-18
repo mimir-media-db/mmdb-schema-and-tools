@@ -4,7 +4,7 @@
  */
 
 import { WikidataMovie, WikidataPerson, WikidataSeries } from './wikidata-client.js';
-import { generateMovieId, generatePersonId, generateSeriesId } from './id-generator.js';
+import { generateMovieId, generatePersonId, generateSeriesId, generateSlug } from './id-generator.js';
 
 /**
  * Determines whether a title is usable for ingestion.
@@ -42,6 +42,7 @@ export interface MMDBPerson {
   schema_version: number;
   id: string;
   name: string;
+  also_known_as?: string[];
   birth_year?: number;
   death_year?: number | null;
   external_ids: {
@@ -107,18 +108,39 @@ export function normalizeMovie(wikiMovie: WikidataMovie): MMDBMovie {
 }
 
 export function normalizePerson(wikiPerson: WikidataPerson): MMDBPerson {
-  const id = generatePersonId(wikiPerson.label);
+  let nameForSlug = wikiPerson.label;
+  const displayName = wikiPerson.label;
+  const alsoKnownAs: string[] = [];
+
+  // If label starts with non-alpha, try birth name for slug
+  const testSlug = generateSlug(nameForSlug);
+  if (/^[^a-z]/.test(testSlug) && wikiPerson.birthName) {
+    nameForSlug = wikiPerson.birthName;
+    alsoKnownAs.push(wikiPerson.birthName);
+  }
+
+  // Final fallback: strip leading non-alpha if still unroutable
+  let slug = generateSlug(nameForSlug);
+  if (/^[^a-z]/.test(slug)) {
+    slug = slug.replace(/^[^a-z]+/, '');
+  }
+  const id = slug ? `p_${slug}` : generatePersonId(nameForSlug);
+
   const today = new Date().toISOString().split('T')[0];
 
   const person: MMDBPerson = {
     schema_version: 1,
     id,
-    name: wikiPerson.label,
+    name: displayName,
     external_ids: {
       wikidata: wikiPerson.wikidataId,
     },
     last_updated: today,
   };
+
+  if (alsoKnownAs.length > 0) {
+    person.also_known_as = alsoKnownAs;
+  }
 
   if (wikiPerson.birthYear) {
     person.birth_year = wikiPerson.birthYear;

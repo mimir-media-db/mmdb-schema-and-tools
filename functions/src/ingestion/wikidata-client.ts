@@ -29,6 +29,7 @@ export interface WikidataPerson {
   deathYear?: number;
   imdbId?: string;
   wikidataId: string;
+  birthName?: string;
 }
 
 export interface WikidataSeries {
@@ -194,7 +195,7 @@ export function buildPersonQueryFromMovies(movieWikidataIds: string[], limit: nu
   const movieValues = movieWikidataIds.map(id => `wd:${id}`).join(' ');
 
   return `
-SELECT DISTINCT ?person ?personLabel ?birthDate ?deathDate ?imdb
+SELECT DISTINCT ?person ?personLabel ?birthDate ?deathDate ?imdb ?birthName
 WHERE {
   VALUES ?movie { ${movieValues} }
   
@@ -211,6 +212,7 @@ WHERE {
   
   OPTIONAL { ?person wdt:P569 ?birthDate. }  # birth date
   OPTIONAL { ?person wdt:P570 ?deathDate. }  # death date
+  OPTIONAL { ?person wdt:P1477 ?birthName. } # birth name
   
   SERVICE wikibase:label { bd:serviceParam wikibase:language "${LABEL_LANGUAGES}". }
 }
@@ -300,6 +302,7 @@ export function parsePersonResults(results: any): WikidataPerson[] {
       deathYear: binding.deathDate?.value ? new Date(binding.deathDate.value).getFullYear() : undefined,
       imdbId: binding.imdb?.value,
       wikidataId,
+      birthName: binding.birthName?.value,
     });
   }
 

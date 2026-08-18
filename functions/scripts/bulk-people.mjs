@@ -49,6 +49,7 @@ import {
   enableAutoMerge,
   getExistingIds,
   repoExists,
+  getPeopleRepo,
 } from './lib/rescan-core.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -58,7 +59,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const WIKIDATA_ENDPOINT = 'https://query.wikidata.org/sparql';
 const USER_AGENT = 'MMDB-Ingestion/1.0.0 (https://github.com/mimir-media-db)';
 const LABEL_LANGUAGES = 'en,es,fr,de,pt,it,ja,ko,zh,ar,hi,ru';
-const PEOPLE_REPO = 'mmdb-people';
 
 // ─── Parse arguments ─────────────────────────────────────────────────────────
 
@@ -155,15 +155,33 @@ function generatePersonId(name) {
 }
 
 function normalizePerson(wikiPerson) {
-  const id = generatePersonId(wikiPerson.label);
+  let nameForSlug = wikiPerson.label;
+  const displayName = wikiPerson.label;
+  const alsoKnownAs = [];
+
+  // If label starts with non-alpha, try birth name for slug
+  const testSlug = generatePersonSlug(nameForSlug);
+  if (/^[^a-z]/.test(testSlug) && wikiPerson.birthName) {
+    nameForSlug = wikiPerson.birthName;
+    alsoKnownAs.push(wikiPerson.birthName);
+  }
+
+  // Final fallback: strip leading non-alpha if still unroutable
+  let slug = generatePersonSlug(nameForSlug);
+  if (/^[^a-z]/.test(slug)) {
+    slug = slug.replace(/^[^a-z]+/, '');
+  }
+  const id = slug ? `p_${slug}` : generatePersonId(nameForSlug);
+
   const today = new Date().toISOString().split('T')[0];
   const person = {
     schema_version: 1,
     id,
-    name: wikiPerson.label,
+    name: displayName,
     external_ids: { wikidata: wikiPerson.wikidataId },
     last_updated: today,
   };
+  if (alsoKnownAs.length > 0) person.also_known_as = alsoKnownAs;
   if (wikiPerson.birthYear) person.birth_year = wikiPerson.birthYear;
   if (wikiPerson.deathYear) person.death_year = wikiPerson.deathYear;
   if (wikiPerson.imdbId && /^nm\d+$/.test(wikiPerson.imdbId)) {
@@ -182,7 +200,7 @@ function getPersonFilePath(person) {
 function buildPeopleQuery(movieQIds, limit = 500) {
   const values = movieQIds.map(id => `wd:${id}`).join(' ');
   return `
-SELECT DISTINCT ?person ?personLabel ?birthDate ?deathDate ?imdb
+SELECT DISTINCT ?person ?personLabel ?birthDate ?deathDate ?imdb ?birthName
 WHERE {
   VALUES ?movie { ${values} }
   { ?movie wdt:P161 ?person. }
@@ -192,6 +210,7 @@ WHERE {
   OPTIONAL { ?person wdt:P345 ?imdb. }
   OPTIONAL { ?person wdt:P569 ?birthDate. }
   OPTIONAL { ?person wdt:P570 ?deathDate. }
+  OPTIONAL { ?person wdt:P1477 ?birthName. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "${LABEL_LANGUAGES}". }
 }
 ORDER BY ?personLabel
@@ -253,6 +272,7 @@ function parsePersonResults(results) {
     const birthDate = binding.birthDate?.value;
     const deathDate = binding.deathDate?.value;
     const imdbId = binding.imdb?.value;
+    const birthName = binding.birthName?.value;
 
     people.set(wikidataId, {
       wikidataId,
@@ -260,6 +280,7 @@ function parsePersonResults(results) {
       birthYear: birthDate ? new Date(birthDate).getFullYear() : undefined,
       deathYear: deathDate ? new Date(deathDate).getFullYear() : undefined,
       imdbId,
+      birthName,
     });
   }
 
@@ -346,11 +367,16 @@ async function extractMovieQIds(token, yearRepo) {
 // ─── Resume check for people branches ────────────────────────────────────────
 
 async function hasRecentPeopleBranch(ghApi, year) {
-  const { ok, data } = await retryOnServerError(
-    () => ghApi('GET', `/repos/${ORG}/${PEOPLE_REPO}/git/matching-refs/heads/mmdb-ingest/people-${year}-`),
-  );
-  if (!ok || !Array.isArray(data)) return false;
-  return data.length > 0;
+  // Check all 26 letter repos for existing people branches (check a few representative ones)
+  const letters = ['a', 'm', 's'];
+  for (const letter of letters) {
+    const repo = `mmdb-people-${letter}`;
+    const { ok, data } = await retryOnServerError(
+      () => ghApi('GET', `/repos/${ORG}/${repo}/git/matching-refs/heads/mmdb-ingest/people-${year}-`),
+    );
+    if (ok && Array.isArray(data) && data.length > 0) return true;
+  }
+  return false;
 }
 
 // ─── Progress tracking ───────────────────────────────────────────────────────
@@ -455,7 +481,7 @@ for (let i = 0; i < totalYears; i++) {
     // ─── Dry run mode ──────────────────────────────────────────────────────
 
     if (dryRun) {
-      log(`Would process: ${yearRepo} → extract Q-IDs → query Wikidata → commit to ${PEOPLE_REPO}`);
+      log(`Would process: ${yearRepo} → extract Q-IDs → query Wikidata → commit to mmdb-people-{a-z}`);
       results.push({ year, status: 'dry-run' });
       continue;
     }
@@ -534,117 +560,130 @@ for (let i = 0; i < totalYears; i++) {
       normalizedPeople.push(person);
     }
 
-    // ─── Dedup against existing people in mmdb-people ──────────────────────
+    // ─── Dedup against existing people in target repos ───────────────────────
 
-    log(`Checking for duplicates against ${PEOPLE_REPO}...`);
-    const existingIds = await getExistingIds(ghApi, PEOPLE_REPO, 'data/people');
+    log(`Grouping ${normalizedPeople.length} people by target repo...`);
 
-    const newPeople = normalizedPeople.filter(p => !existingIds.has(p.id));
-    const duplicateCount = normalizedPeople.length - newPeople.length;
-
-    log(`Dedup: ${duplicateCount} existing, ${newPeople.length} new`);
-
-    if (newPeople.length === 0) {
-      log(`No new people to add for year ${year}`);
-      results.push({ year, status: 'success', people: 0, duplicates: duplicateCount });
-      continue;
+    // Group people by their target alphabetical repo
+    const peopleByRepo = new Map();
+    for (const person of normalizedPeople) {
+      const targetRepo = getPeopleRepo(person.id);
+      if (!peopleByRepo.has(targetRepo)) peopleByRepo.set(targetRepo, []);
+      peopleByRepo.get(targetRepo).push(person);
     }
 
-    // ─── Create branch and commit ──────────────────────────────────────────
+    let totalNewPeople = 0;
+    let totalDuplicates = 0;
 
-    const runDate = new Date().toISOString().split('T')[0].replace(/-/g, '');
-    const branchName = `mmdb-ingest/people-${year}-${runDate}`;
+    for (const [targetRepo, repoPeople] of peopleByRepo) {
+      log(`Checking dedup for ${targetRepo} (${repoPeople.length} people)...`);
+      const existingIds = await getExistingIds(ghApi, targetRepo, 'data/people');
 
-    const masterSha = await getDefaultBranchSha(ghApi, PEOPLE_REPO);
-    if (!masterSha) {
-      throw new Error(`Could not get master SHA for ${PEOPLE_REPO}`);
-    }
+      const newPeople = repoPeople.filter(p => !existingIds.has(p.id));
+      const duplicateCount = repoPeople.length - newPeople.length;
+      totalDuplicates += duplicateCount;
 
-    const { ok: branchOk } = await createBranch(ghApi, PEOPLE_REPO, branchName, masterSha);
-    if (!branchOk) {
-      throw new Error(`Failed to create branch ${branchName} — may already exist`);
-    }
-
-    log(`Branch created: ${branchName}`);
-    log(`Committing ${newPeople.length} people in batches...`);
-
-    const groups = groupByFirstLetter(newPeople);
-    let committedCount = 0;
-
-    for (const [letter, group] of groups) {
-      const files = group.map(person => ({
-        path: getPersonFilePath(person),
-        content: JSON.stringify(person, null, 2) + '\n',
-      }));
-      await commitBatch(ghApi, PEOPLE_REPO, branchName, files, `ingest: add ${group.length} people (${letter})`);
-      committedCount += group.length;
-      process.stdout.write(`[${letter}:${group.length}] `);
-    }
-    process.stdout.write('\n');
-    log(`Committed ${committedCount} people in ${groups.size} batches`);
-
-    // ─── Create PR ─────────────────────────────────────────────────────────
-
-    const prTitle = `ingest: add ${newPeople.length} people (${year} movies)`;
-    const prBody = [
-      `## People from ${year} Movies`,
-      '',
-      `Extracted cast, directors, and producers from movies in \`mmdb-${year}\`.`,
-      '',
-      '### Summary',
-      '',
-      '| Metric | Count |',
-      '|--------|-------|',
-      `| Movies with Wikidata IDs | ${qIds.length} |`,
-      `| Wikidata queries made | ${Math.min(batches.length, maxQueries - (totalQueriesMade - batches.length))} |`,
-      `| Unique people found | ${allPeople.size} |`,
-      `| Already in mmdb-people | ${duplicateCount} |`,
-      `| New people added | ${newPeople.length} |`,
-    ].join('\n');
-
-    const { ok: prOk, data: prData } = await createPR(ghApi, PEOPLE_REPO, prTitle, branchName, prBody);
-    if (!prOk) {
-      throw new Error(`Failed to create PR: ${prData.message || JSON.stringify(prData)}`);
-    }
-
-    log(`PR created: ${PEOPLE_REPO}#${prData.number}`);
-
-    // Squash merge
-    try {
-      await new Promise(r => setTimeout(r, 1000));
-      const { ok: mergeOk } = await retryOnServerError(
-        () => ghApi('PUT', `/repos/${ORG}/${PEOPLE_REPO}/pulls/${prData.number}/merge`, {
-          merge_method: 'squash',
-          commit_title: prTitle,
-        }),
-      );
-      if (mergeOk) {
-        log(`Merge: ✓ squash merged`);
-        // Dispatch workflow for index rebuild
-        await new Promise(r => setTimeout(r, 1000));
-        const { ok: dispatchOk } = await ghApi('POST', `/repos/${ORG}/${PEOPLE_REPO}/actions/workflows/validate.yml/dispatches`, {
-          ref: 'master',
-        });
-        log(`CI: ${dispatchOk ? '✓ index build dispatched' : '⚠ could not dispatch'}`);
-      } else {
-        const autoMergeOk = await enableAutoMerge(ghApi, ghGraphQL, PEOPLE_REPO, prData.number);
-        log(`Merge: ⚠ direct merge blocked, auto-merge ${autoMergeOk ? 'enabled' : 'failed'}`);
+      if (newPeople.length === 0) {
+        log(`  ${targetRepo}: no new people (${duplicateCount} duplicates)`);
+        continue;
       }
-    } catch (err) {
-      log(`Merge: ⚠ ${err.message}`);
+
+      log(`  ${targetRepo}: ${newPeople.length} new, ${duplicateCount} duplicates`);
+
+      // ─── Create branch and commit to target repo ───────────────────────────
+
+      const runDate = new Date().toISOString().split('T')[0].replace(/-/g, '');
+      const branchName = `mmdb-ingest/people-${year}-${runDate}`;
+
+      const masterSha = await getDefaultBranchSha(ghApi, targetRepo);
+      if (!masterSha) {
+        log(`  ⚠ Could not get master SHA for ${targetRepo}, skipping`);
+        continue;
+      }
+
+      const { ok: branchOk } = await createBranch(ghApi, targetRepo, branchName, masterSha);
+      if (!branchOk) {
+        log(`  ⚠ Failed to create branch ${branchName} on ${targetRepo} — may already exist, skipping`);
+        continue;
+      }
+
+      log(`  Branch created: ${branchName}`);
+      log(`  Committing ${newPeople.length} people in batches...`);
+
+      const groups = groupByFirstLetter(newPeople);
+
+      for (const [letter, group] of groups) {
+        const files = group.map(person => ({
+          path: getPersonFilePath(person),
+          content: JSON.stringify(person, null, 2) + '\n',
+        }));
+        await commitBatch(ghApi, targetRepo, branchName, files, `ingest: add ${group.length} people (${letter})`);
+        process.stdout.write(`[${letter}:${group.length}] `);
+      }
+      process.stdout.write('\n');
+
+      // ─── Create PR ─────────────────────────────────────────────────────────
+
+      const prTitle = `ingest: add ${newPeople.length} people (${year} movies)`;
+      const prBody = [
+        `## People from ${year} Movies`,
+        '',
+        `Extracted cast, directors, and producers from movies in \`mmdb-${year}\`.`,
+        '',
+        '### Summary',
+        '',
+        '| Metric | Count |',
+        '|--------|-------|',
+        `| New people added | ${newPeople.length} |`,
+        `| Duplicates skipped | ${duplicateCount} |`,
+      ].join('\n');
+
+      const { ok: prOk, data: prData } = await createPR(ghApi, targetRepo, prTitle, branchName, prBody);
+      if (!prOk) {
+        log(`  ⚠ Failed to create PR on ${targetRepo}: ${prData.message || JSON.stringify(prData)}`);
+        continue;
+      }
+
+      log(`  PR created: ${targetRepo}#${prData.number}`);
+
+      // Squash merge
+      try {
+        await new Promise(r => setTimeout(r, 1000));
+        const { ok: mergeOk } = await retryOnServerError(
+          () => ghApi('PUT', `/repos/${ORG}/${targetRepo}/pulls/${prData.number}/merge`, {
+            merge_method: 'squash',
+            commit_title: prTitle,
+          }),
+        );
+        if (mergeOk) {
+          log(`  Merge: ✓ squash merged`);
+          await new Promise(r => setTimeout(r, 1000));
+          const { ok: dispatchOk } = await ghApi('POST', `/repos/${ORG}/${targetRepo}/actions/workflows/validate.yml/dispatches`, {
+            ref: 'master',
+          });
+          log(`  CI: ${dispatchOk ? '✓ index build dispatched' : '⚠ could not dispatch'}`);
+        } else {
+          const autoMergeOk = await enableAutoMerge(ghApi, ghGraphQL, targetRepo, prData.number);
+          log(`  Merge: ⚠ direct merge blocked, auto-merge ${autoMergeOk ? 'enabled' : 'failed'}`);
+        }
+      } catch (err) {
+        log(`  Merge: ⚠ ${err.message}`);
+      }
+
+      totalNewPeople += newPeople.length;
     }
 
-    totalPeopleAdded += newPeople.length;
+    totalPeopleAdded += totalNewPeople;
     const duration = Date.now() - yearStart;
-    log(`Year ${year} complete: ${newPeople.length} people added (${formatDuration(duration)})`);
+    log(`Year ${year} complete: ${totalNewPeople} people added across ${peopleByRepo.size} repos (${formatDuration(duration)})`);
 
     results.push({
       year,
       status: 'success',
-      people: newPeople.length,
-      duplicates: duplicateCount,
+      people: totalNewPeople,
+      duplicates: totalDuplicates,
       moviesProcessed: qIds.length,
-      pr: `${PEOPLE_REPO}#${prData.number}`,
+      repos: [...peopleByRepo.keys()],
     });
 
     // Save progress after each year
