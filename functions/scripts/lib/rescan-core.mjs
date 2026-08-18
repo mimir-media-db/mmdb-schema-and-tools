@@ -731,6 +731,20 @@ export async function rescanYear(options) {
   };
 }
 
+// ─── People repo routing ─────────────────────────────────────────────────────
+
+/**
+ * Get the target people repo for a person ID.
+ * Routes by first letter of slug after p_ prefix.
+ * @param {string} personId - e.g., 'p_aamir_khan'
+ * @returns {string} - e.g., 'mmdb-people-a'
+ */
+export function getPeopleRepo(personId) {
+  const slug = personId.replace(/^p_/, '');
+  const letter = (slug[0] || 'z').toLowerCase();
+  return `mmdb-people-${letter}`;
+}
+
 // ─── Repo existence check ────────────────────────────────────────────────────
 
 /**

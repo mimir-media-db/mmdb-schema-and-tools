@@ -15,5 +15,6 @@ bulk-fill-results.json
 bulk-rescan-results.json
 bulk-people-results.json
 bulk-people-progress.json
+split-people-results.json
 tools/**/*.js
 tools/**/*.d.ts
