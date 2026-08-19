@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://mmdb.org/schema/credits-v1.json",
+  "title": "Credits",
+  "description": "Movie-to-person role mappings for a year",
+  "type": "object",
+  "required": ["schema_version", "year", "last_updated", "credits"],
+  "properties": {
+    "schema_version": { "type": "number", "const": 1 },
+    "year": { "type": "number", "minimum": 1800, "maximum": 2100 },
+    "last_updated": { "type": "string", "format": "date" },
+    "credits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["movie", "person", "role"],
+        "properties": {
+          "movie": { "type": "string", "pattern": "^m_[a-z0-9_]+_[0-9]{4}$" },
+          "person": { "type": "string", "pattern": "^p_[a-z0-9_]+$" },
+          "person_repo": { "type": "string", "pattern": "^mmdb-people-[a-z0-9]$" },
+          "role": { "type": "string", "enum": ["director", "cast", "writer", "producer", "composer"] }
+        }
+      }
+    }
+  }
+}
