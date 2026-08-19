@@ -81,7 +81,17 @@ export function normalizeMovie(wikiMovie: WikidataMovie): MMDBMovie {
   return movie;
 }
 
-export function normalizePerson(wikiPerson: WikidataPerson): MMDBPerson {
+export function normalizePerson(wikiPerson: WikidataPerson): MMDBPerson | null {
+  // Skip ancient people (pre-1800)
+  if (wikiPerson.birthYear && wikiPerson.birthYear < 1800) {
+    console.log(`Skipping ${wikiPerson.label}: birth_year ${wikiPerson.birthYear} < 1800`);
+    return null;
+  }
+  if (wikiPerson.deathYear && wikiPerson.deathYear < 1800) {
+    console.log(`Skipping ${wikiPerson.label}: death_year ${wikiPerson.deathYear} < 1800`);
+    return null;
+  }
+
   const id = generatePersonId(wikiPerson.label);
   const today = new Date().toISOString().split('T')[0];
   

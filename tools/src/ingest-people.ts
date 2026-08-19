@@ -78,6 +78,12 @@ async function main() {
     
     const person = normalizePerson(wikiPerson);
     
+    // Skip if normalizer rejected (ancient person, etc.)
+    if (!person) {
+      skipped++;
+      continue;
+    }
+
     // Check for duplicates in master
     if (existingIds.has(person.id)) {
       skipped++;

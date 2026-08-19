@@ -24,7 +24,7 @@ export function loadSchema(schemaName: string): SchemaValidator {
   
   return {
     validate: (data: unknown) => validate(data),
-    errors: validate.errors || null
+    get errors() { return validate.errors || null; }
   };
 }
 

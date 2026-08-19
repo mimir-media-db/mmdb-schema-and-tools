@@ -732,6 +732,10 @@ async function runPeoplePass(
       try {
         const person = normalizePerson(wikiPerson);
 
+        if (!person) {
+          continue;
+        }
+
         if (allExistingPeopleIds.has(person.id)) {
           continue;
         }

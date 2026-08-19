@@ -414,6 +414,7 @@ export async function runCurrentYearIngestion(dryRun: boolean = false): Promise<
         for (const wikiPerson of people) {
           try {
             const person = normalizePerson(wikiPerson);
+            if (!person) continue;
             if (allExistingPeopleIds.has(person.id)) continue;
             newPeople.push(person);
           } catch (error: any) {

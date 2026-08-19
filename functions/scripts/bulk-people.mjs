@@ -37,6 +37,7 @@ import { writeFileSync, readFileSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { gunzipSync } from 'zlib';
 import { loadGitHubAuth } from './lib/github-app-auth.mjs';
+import { createProgress, trackDownload } from './lib/progress.mjs';
 import {
   ORG,
   retryOnServerError,
@@ -50,6 +51,8 @@ import {
   getExistingIds,
   repoExists,
   getPeopleRepo,
+  createPeopleRepo,
+  waitForRepo,
 } from './lib/rescan-core.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -155,6 +158,16 @@ function generatePersonId(name) {
 }
 
 function normalizePerson(wikiPerson) {
+  // Skip ancient people (pre-1800)
+  if (wikiPerson.birthYear && wikiPerson.birthYear < 1800) {
+    log(`Skipping ${wikiPerson.label}: birth_year ${wikiPerson.birthYear} < 1800`);
+    return null;
+  }
+  if (wikiPerson.deathYear && wikiPerson.deathYear < 1800) {
+    log(`Skipping ${wikiPerson.label}: death_year ${wikiPerson.deathYear} < 1800`);
+    return null;
+  }
+
   let nameForSlug = wikiPerson.label;
   const displayName = wikiPerson.label;
   const alsoKnownAs = [];
@@ -171,7 +184,12 @@ function normalizePerson(wikiPerson) {
   if (/^[^a-z]/.test(slug)) {
     slug = slug.replace(/^[^a-z]+/, '');
   }
-  const id = slug ? `p_${slug}` : generatePersonId(nameForSlug);
+
+  // Reject if slug is empty or too short (would produce invalid ID like "p_" or "p_x")
+  if (!slug || slug.length < 2) {
+    return null;
+  }
+  const id = `p_${slug}`;
 
   const today = new Date().toISOString().split('T')[0];
   const person = {
@@ -191,8 +209,7 @@ function normalizePerson(wikiPerson) {
 }
 
 function getPersonFilePath(person) {
-  const slug = generatePersonSlug(person.name);
-  return `data/people/${slug}.json`;
+  return `data/people/${person.id}.json`;
 }
 
 // ─── SPARQL query builder ────────────────────────────────────────────────────
@@ -293,11 +310,14 @@ function parsePersonResults(results) {
  * Download and extract a GitHub repo tarball, parsing all movie JSON files.
  * Returns an array of wikidata Q-IDs found in movie entries.
  */
-async function extractMovieQIds(token, yearRepo) {
+async function extractMovieQIds(tokenOrManager, yearRepo) {
+  const currentToken = (typeof tokenOrManager === 'object' && tokenOrManager !== null && typeof tokenOrManager.getToken === 'function')
+    ? await tokenOrManager.getToken()
+    : tokenOrManager;
   const url = `https://api.github.com/repos/${ORG}/${yearRepo}/tarball/master`;
   const response = await fetch(url, {
     headers: {
-      'Authorization': `Bearer ${token}`,
+      'Authorization': `Bearer ${currentToken}`,
       'Accept': 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28',
     },
@@ -308,7 +328,7 @@ async function extractMovieQIds(token, yearRepo) {
     throw new Error(`Failed to download tarball for ${yearRepo}: ${response.status}`);
   }
 
-  const buffer = Buffer.from(await response.arrayBuffer());
+  const buffer = await trackDownload(response, `Downloading ${yearRepo}`);
 
   // GitHub serves gzipped tarballs — decompress
   const tarData = gunzipSync(buffer);
@@ -392,12 +412,14 @@ function saveProgress(progress) {
 const envPath = resolve(__dirname, '..', '.env');
 let token;
 let authMethod;
+let tokenManager;
 
 if (!dryRun) {
   try {
     const auth = await loadGitHubAuth(envPath);
     token = auth.token;
     authMethod = auth.method;
+    tokenManager = auth.manager;
   } catch (err) {
     console.error(`Auth error: ${err.message}`);
     process.exit(1);
@@ -435,7 +457,9 @@ let queryCapped = false;
 const failedYears = [];
 const skippedYears = [];
 
-const { ghApi, ghGraphQL } = token ? createGitHubClient(token) : { ghApi: null, ghGraphQL: null };
+const { ghApi, ghGraphQL } = token ? createGitHubClient(tokenManager || token) : { ghApi: null, ghGraphQL: null };
+
+const yearProgress = createProgress(totalYears, 'Years');
 
 for (let i = 0; i < totalYears; i++) {
   const year = fromYear + i;
@@ -489,7 +513,7 @@ for (let i = 0; i < totalYears; i++) {
     // ─── Extract movie Q-IDs from year repo tarball ────────────────────────
 
     log(`Downloading tarball for ${yearRepo}...`);
-    const qIds = await extractMovieQIds(token, yearRepo);
+    const qIds = await extractMovieQIds(tokenManager || token, yearRepo);
     log(`Found ${qIds.length} movies with Wikidata IDs`);
 
     if (qIds.length === 0) {
@@ -508,6 +532,7 @@ for (let i = 0; i < totalYears; i++) {
     log(`Processing ${batches.length} batches (${batchSize} movies/batch)...`);
 
     const allPeople = new Map(); // Dedup by wikidata ID across batches
+    const batchProgress = createProgress(batches.length, 'Batches');
 
     for (let bIdx = 0; bIdx < batches.length; bIdx++) {
       // Check query cap
@@ -536,16 +561,20 @@ for (let i = 0; i < totalYears; i++) {
           }
         }
 
+        batchProgress.tick(`${allPeople.size} people`);
+
         if ((bIdx + 1) % 10 === 0 || bIdx === batches.length - 1) {
-          log(`  Batch ${bIdx + 1}/${batches.length}: ${allPeople.size} unique people so far`);
+          batchProgress.log(`  Batch ${bIdx + 1}/${batches.length}: ${allPeople.size} unique people so far`);
         }
       } catch (err) {
-        log(`  ⚠ Batch ${bIdx + 1} failed: ${err.message}`);
+        batchProgress.tick(`failed`);
+        batchProgress.log(`  ⚠ Batch ${bIdx + 1} failed: ${err.message}`);
         // Continue with remaining batches
       }
     }
 
     log(`Wikidata returned ${allPeople.size} unique people for year ${year}`);
+    batchProgress.done();
 
     if (allPeople.size === 0) {
       results.push({ year, status: 'success', people: 0 });
@@ -555,9 +584,19 @@ for (let i = 0; i < totalYears; i++) {
     // ─── Normalize people ──────────────────────────────────────────────────
 
     const normalizedPeople = [];
+    let skippedBadSlug = 0;
     for (const wikiPerson of allPeople.values()) {
       const person = normalizePerson(wikiPerson);
+      // Skip people whose names produce empty or invalid slugs
+      if (!person) {
+        skippedBadSlug++;
+        log(`  Skipped bad slug: "${wikiPerson.label}" (wikidata: ${wikiPerson.wikidataId})`);
+        continue;
+      }
       normalizedPeople.push(person);
+    }
+    if (skippedBadSlug > 0) {
+      log(`Skipped ${skippedBadSlug} people with invalid slugs`);
     }
 
     // ─── Dedup against existing people in target repos ───────────────────────
@@ -589,6 +628,16 @@ for (let i = 0; i < totalYears; i++) {
       }
 
       log(`  ${targetRepo}: ${newPeople.length} new, ${duplicateCount} duplicates`);
+
+      // ─── Auto-create repo if it doesn't exist ───────────────────────────────
+
+      const exists = await repoExists(ghApi, targetRepo);
+      if (!exists) {
+        const letter = targetRepo.replace('mmdb-people-', '');
+        log(`  Repo ${targetRepo} does not exist — creating...`);
+        await createPeopleRepo(ghApi, letter);
+        log(`  Repo ${targetRepo} ✓ created`);
+      }
 
       // ─── Create branch and commit to target repo ───────────────────────────
 
@@ -704,6 +753,8 @@ for (let i = 0; i < totalYears; i++) {
 
   // ─── Delay between years ───────────────────────────────────────────────────
 
+  yearProgress.tick(`Year ${year}`);
+
   if (i < totalYears - 1 && !dryRun) {
     log(`Waiting 10s between years...`);
     await new Promise(r => setTimeout(r, 10000));
@@ -711,6 +762,8 @@ for (let i = 0; i < totalYears; i++) {
 }
 
 // ─── Final summary ───────────────────────────────────────────────────────────
+
+yearProgress.done();
 
 const completedAt = new Date().toISOString();
 const totalDuration = Date.now() - new Date(startedAt).getTime();

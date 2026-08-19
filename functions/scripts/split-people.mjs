@@ -26,6 +26,7 @@ import { writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { gunzipSync } from 'zlib';
 import { loadGitHubAuth } from './lib/github-app-auth.mjs';
+import { createProgress, trackDownload } from './lib/progress.mjs';
 import {
   ORG,
   retryOnServerError,
@@ -37,6 +38,7 @@ import {
   enableAutoMerge,
   repoExists,
   getPeopleRepo,
+  createPeopleRepo,
   GITHUB_RATE_LIMIT_MS,
 } from './lib/rescan-core.mjs';
 
@@ -82,11 +84,14 @@ function formatDuration(ms) {
  * Download and extract all person JSON files from mmdb-people tarball.
  * Returns a Map<string, object> of personId → parsed person data.
  */
-async function extractPeopleFromTarball(token) {
+async function extractPeopleFromTarball(tokenOrManager) {
+  const currentToken = (typeof tokenOrManager === 'object' && tokenOrManager !== null && typeof tokenOrManager.getToken === 'function')
+    ? await tokenOrManager.getToken()
+    : tokenOrManager;
   const url = `https://api.github.com/repos/${ORG}/${SOURCE_REPO}/tarball/master`;
   const response = await fetch(url, {
     headers: {
-      'Authorization': `Bearer ${token}`,
+      'Authorization': `Bearer ${currentToken}`,
       'Accept': 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28',
     },
@@ -97,7 +102,7 @@ async function extractPeopleFromTarball(token) {
     throw new Error(`Failed to download tarball for ${SOURCE_REPO}: ${response.status}`);
   }
 
-  const buffer = Buffer.from(await response.arrayBuffer());
+  const buffer = await trackDownload(response, `Downloading ${SOURCE_REPO}`);
   const tarData = gunzipSync(buffer);
 
   const people = new Map();
@@ -140,209 +145,19 @@ async function extractPeopleFromTarball(token) {
   return people;
 }
 
-// ─── Create people letter repo ───────────────────────────────────────────────
-
-/**
- * Create a new alphabetical people repo with standard structure.
- * Similar to createYearRepo but adapted for people.
- */
-async function createPeopleRepo(ghApi, letter) {
-  const repoName = `mmdb-people-${letter}`;
-  const upperLetter = letter.toUpperCase();
-
-  // 1. Create the repo with auto_init
-  const { ok, data } = await retryOnServerError(
-    () => ghApi('POST', `/orgs/${ORG}/repos`, {
-      name: repoName,
-      description: `MMDB People — ${upperLetter}`,
-      visibility: 'public',
-      auto_init: true,
-      has_issues: true,
-      has_projects: false,
-      has_wiki: false,
-      allow_squash_merge: true,
-      allow_merge_commit: false,
-      allow_rebase_merge: false,
-      delete_branch_on_merge: true,
-      allow_auto_merge: true,
-    }),
-  );
-
-  if (!ok) {
-    throw new Error(`Failed to create repo ${repoName}: ${data.message || JSON.stringify(data)}`);
-  }
-
-  // Wait for GitHub to propagate
-  await new Promise(r => setTimeout(r, 5000));
-
-  // 2. Rename default branch from 'main' to 'master'
-  await retryOnServerError(
-    () => ghApi('POST', `/repos/${ORG}/${repoName}/branches/main/rename`, {
-      new_name: 'master',
-    }),
-  );
-
-  await new Promise(r => setTimeout(r, 3000));
-
-  // 3. Commit the initial structure
-  const packageJson = {
-    name: `mmdb-people-${letter}`,
-    version: '1.0.0',
-    description: `MMDB people data — ${upperLetter}`,
-    private: true,
-    devDependencies: {
-      'mmdb-validate': '^1.0.0',
-    },
-  };
-
-  const validateWorkflow = `name: Validate and Build Indexes
-
-on:
-  pull_request:
-    branches: [master]
-    paths: ['data/**']
-  push:
-    branches: [master]
-    paths: ['data/**']
-  workflow_dispatch:
-
-permissions:
-  contents: write
-
-jobs:
-  validate:
-    runs-on: ubuntu-latest
-    if: github.actor != 'github-actions[bot]'
-    steps:
-      - name: Checkout data repo
-        uses: actions/checkout@v4
-        with:
-          path: data
-          persist-credentials: false
-
-      - name: Checkout tools repo
-        uses: actions/checkout@v4
-        with:
-          repository: mimir-media-db/mmdb-schema-and-tools
-          ref: master
-          path: tools
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Build tools
-        run: |
-          cd tools
-          npm install
-          npm run build
-
-      - name: Validate data
-        run: |
-          cd data
-          node ../tools/dist/validate-repo.js --schema=person
-
-      - name: Build indexes
-        run: |
-          cd data
-          node ../tools/dist/build-indexes.js
-
-      - name: Check for index changes
-        id: check_changes
-        run: |
-          cd data
-          git diff --exit-code data/*/index.json || echo "changed=true" >> \$GITHUB_OUTPUT
-
-      - name: Generate App token
-        if: steps.check_changes.outputs.changed == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-        id: app-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: \${{ secrets.MMDB_BOT_APP_ID }}
-          private-key: \${{ secrets.MMDB_BOT_PRIVATE_KEY }}
-
-      - name: Commit and push index updates
-        if: steps.check_changes.outputs.changed == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-        run: |
-          cd data
-          git add data/*/index.json 2>/dev/null || true
-          git config user.name "mmdb-bot[bot]"
-          git config user.email "mmdb-bot[bot]@users.noreply.github.com"
-          git remote set-url origin "https://x-access-token:\${{ steps.app-token.outputs.token }}@github.com/\${{ github.repository }}.git"
-          git commit -m "chore: update indexes [skip ci]" || echo "Nothing to commit"
-          git push
-`;
-
-  const files = [
-    { path: 'README.md', content: `# MMDB People — ${upperLetter}\n\nPeople whose slug starts with '${letter}'.\n` },
-    { path: 'package.json', content: JSON.stringify(packageJson, null, 2) + '\n' },
-    { path: 'data/people/index.json', content: '[]\n' },
-    { path: '.github/workflows/validate.yml', content: validateWorkflow },
-  ];
-
-  // Push files (get sha for existing ones like README from auto_init)
-  for (const file of files) {
-    let sha;
-    try {
-      const { ok: getOk, data: getData } = await retryOnServerError(
-        () => ghApi('GET', `/repos/${ORG}/${repoName}/contents/${file.path}?ref=master`),
-      );
-      if (getOk && getData.sha) {
-        sha = getData.sha;
-      }
-    } catch { /* file doesn't exist yet */ }
-
-    const { ok: putOk, data: putData } = await retryOnServerError(
-      () => ghApi('PUT', `/repos/${ORG}/${repoName}/contents/${file.path}`, {
-        message: `chore: initialize ${file.path}`,
-        content: Buffer.from(file.content).toString('base64'),
-        branch: 'master',
-        ...(sha && { sha }),
-      }),
-    );
-    if (!putOk) {
-      console.warn(`  ⚠ Failed to push ${file.path}: ${putData.message || JSON.stringify(putData)}`);
-    }
-    await new Promise(r => setTimeout(r, GITHUB_RATE_LIMIT_MS));
-  }
-
-  // 4. Set up branch protection
-  await retryOnServerError(
-    () => ghApi('PUT', `/repos/${ORG}/${repoName}/branches/master/protection`, {
-      required_status_checks: {
-        strict: false,
-        contexts: ['validate'],
-      },
-      enforce_admins: false,
-      required_pull_request_reviews: null,
-      restrictions: null,
-    }),
-  );
-
-  // 5. Set workflow permissions
-  await retryOnServerError(
-    () => ghApi('PUT', `/repos/${ORG}/${repoName}/actions/permissions/workflow`, {
-      default_workflow_permissions: 'write',
-      can_approve_pull_request_reviews: true,
-    }),
-  );
-
-  log(`  ✓ Created repo: ${repoName}`);
-  return repoName;
-}
-
 // ─── Authentication ──────────────────────────────────────────────────────────
 
 const envPath = resolve(__dirname, '..', '.env');
 let token;
 let authMethod;
+let tokenManager;
 
 if (!dryRun) {
   try {
     const auth = await loadGitHubAuth(envPath);
     token = auth.token;
     authMethod = auth.method;
+    tokenManager = auth.manager;
   } catch (err) {
     console.error(`Auth error: ${err.message}`);
     process.exit(1);
@@ -388,20 +203,30 @@ if (!token) {
     const auth = await loadGitHubAuth(envPath);
     token = auth.token;
     authMethod = auth.method;
+    tokenManager = auth.manager;
   } catch (err) {
     console.error(`Auth error: ${err.message}`);
     process.exit(1);
   }
 }
 
-allPeople = await extractPeopleFromTarball(token);
+allPeople = await extractPeopleFromTarball(tokenManager || token);
 log(`Extracted ${allPeople.size} people from ${SOURCE_REPO}`);
 
 // ─── Route people to alphabetical repos ──────────────────────────────────────
 
+const VALID_PERSON_ID = /^p_[a-z][a-z0-9_]+$/;
 const distribution = new Map(); // letter → person[]
+let skippedInvalid = 0;
 
 for (const [personId, person] of allPeople) {
+  // Skip people with empty or invalid slugs
+  if (!personId || personId === 'p_' || !VALID_PERSON_ID.test(personId)) {
+    skippedInvalid++;
+    log(`  Skipping invalid person: id="${personId}", name="${person.name || '?'}"`);
+    continue;
+  }
+
   const targetRepo = getPeopleRepo(personId);
   const letter = targetRepo.replace('mmdb-people-', '');
 
@@ -409,6 +234,10 @@ for (const [personId, person] of allPeople) {
     distribution.set(letter, []);
   }
   distribution.get(letter).push(person);
+}
+
+if (skippedInvalid > 0) {
+  log(`Skipped ${skippedInvalid} people with invalid IDs`);
 }
 
 // ─── Show distribution ───────────────────────────────────────────────────────
@@ -447,8 +276,9 @@ if (dryRun) {
 
 // ─── Process each letter ─────────────────────────────────────────────────────
 
-const { ghApi, ghGraphQL } = createGitHubClient(token);
+const { ghApi, ghGraphQL } = createGitHubClient(tokenManager || token);
 const results = [];
+const letterProgress = createProgress(targetLetters.length, 'Letters');
 
 for (const letter of targetLetters) {
   const people = distribution.get(letter);
@@ -503,7 +333,7 @@ for (const letter of targetLetters) {
     let committedCount = 0;
     const batchSize = 200; // Commit in groups to avoid tree API limits
     const allFiles = people.map(person => ({
-      path: `data/people/${person.id.replace(/^p_/, '')}.json`,
+      path: `data/people/${person.id}.json`,
       content: JSON.stringify(person, null, 2) + '\n',
     }));
 
@@ -580,10 +410,13 @@ for (const letter of targetLetters) {
   }
 
   // Brief delay between letter repos
+  letterProgress.tick(`Letter ${letter.toUpperCase()}`);
   await new Promise(r => setTimeout(r, 2000));
 }
 
 // ─── Final summary ───────────────────────────────────────────────────────────
+
+letterProgress.done();
 
 const totalDuration = Date.now() - startedAt;
 const successCount = results.filter(r => r.status === 'success').length;
