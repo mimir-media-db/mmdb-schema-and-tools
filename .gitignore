@@ -18,3 +18,5 @@ bulk-people-progress.json
 split-people-results.json
 tools/**/*.js
 tools/**/*.d.ts
+fix-people-filenames-results.json
+remove-ancient-people-results.json
