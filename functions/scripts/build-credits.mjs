@@ -24,9 +24,9 @@
  *   --year=YYYY       Single year (shorthand for --from=YYYY --to=YYYY)
  *   --dry-run         Show plan without executing commits
  *   --resume          Skip years that already have credits.json
- *   --max-queries=N   Cap total Wikidata queries per run (default: unlimited)
- *   --batch-size=N    Movies per Wikidata query (default: 30)
- *   --delay=N         Seconds between Wikidata queries (default: 2)
+ *   --max-queries=N   Cap total Wikidata queries (5 per batch — default: unlimited)
+ *   --batch-size=N    Movies per Wikidata query batch (default: 15)
+ *   --delay=N         Seconds between batches (default: 2; 1s between role queries)
  *
  * Environment:
  *   GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY + GITHUB_APP_INSTALLATION_ID
@@ -95,9 +95,9 @@ Options:
   --year=YYYY        Single year shortcut
   --dry-run          Show plan without executing commits
   --resume           Skip years that already have credits.json
-  --max-queries=N    Cap total Wikidata queries per run (default: unlimited)
-  --batch-size=N     Movies per Wikidata query batch (default: 30)
-  --delay=N          Seconds between Wikidata queries (default: 2)
+  --max-queries=N    Cap total Wikidata queries per run (5 per batch — default: unlimited)
+  --batch-size=N     Movies per Wikidata query batch (default: 15)
+  --delay=N          Seconds between batches (default: 2; 1s between role queries within a batch)
 
 Examples:
   node scripts/build-credits.mjs --from=2000 --to=2026
@@ -108,7 +108,7 @@ Examples:
 }
 
 const delay = delayFlag ? parseInt(delayFlag.split('=')[1]) : 2;
-const batchSize = batchSizeFlag ? parseInt(batchSizeFlag.split('=')[1]) : 30;
+const batchSize = batchSizeFlag ? parseInt(batchSizeFlag.split('=')[1]) : 15;
 const maxQueries = maxQueriesFlag ? parseInt(maxQueriesFlag.split('=')[1]) : Infinity;
 
 if (isNaN(fromYear) || fromYear < 1888 || fromYear > 2100) {
@@ -215,25 +215,36 @@ function getPersonFilePath(person) {
   return `data/people/${person.id}.json`;
 }
 
-// ─── SPARQL query builder (credits with roles) ───────────────────────────────
+// ─── Role definitions ─────────────────────────────────────────────────────────
 
-function buildCreditsQuery(movieQIds) {
+/**
+ * Credits are queried per-role to avoid Wikidata 504 timeouts.
+ * The old approach used a single UNION query with 5 roles × 30 movies × OPTIONALs
+ * which was too complex. Now we run 5 simple queries per batch (one per role).
+ *
+ * --max-queries counts TOTAL Wikidata queries (5 per batch of movies).
+ */
+const ROLES = [
+  { role: 'director', property: 'wdt:P57' },
+  { role: 'cast', property: 'wdt:P161' },
+  { role: 'writer', property: 'wdt:P58' },
+  { role: 'producer', property: 'wdt:P162' },
+  { role: 'composer', property: 'wdt:P86' },
+];
+
+// ─── SPARQL query builder (per-role, no UNION) ────────────────────────────────
+
+/**
+ * Build a simple SPARQL query for a single role property.
+ * Each query is lightweight: one property, no UNION, fast on Wikidata.
+ */
+function buildRoleQuery(movieQIds, property) {
   const values = movieQIds.map(id => `wd:${id}`).join(' ');
   return `
-SELECT DISTINCT ?movie ?person ?personLabel ?role ?birthDate ?deathDate ?imdb ?birthName
+SELECT DISTINCT ?movie ?person ?personLabel ?birthDate ?deathDate ?imdb ?birthName
 WHERE {
   VALUES ?movie { ${values} }
-  {
-    ?movie wdt:P57 ?person. BIND("director" AS ?role)
-  } UNION {
-    ?movie wdt:P161 ?person. BIND("cast" AS ?role)
-  } UNION {
-    ?movie wdt:P58 ?person. BIND("writer" AS ?role)
-  } UNION {
-    ?movie wdt:P162 ?person. BIND("producer" AS ?role)
-  } UNION {
-    ?movie wdt:P86 ?person. BIND("composer" AS ?role)
-  }
+  ?movie ${property} ?person.
   ?person wdt:P31 wd:Q5.
   OPTIONAL { ?person wdt:P345 ?imdb. }
   OPTIONAL { ?person wdt:P569 ?birthDate. }
@@ -284,18 +295,18 @@ async function queryWikidataWithBackoff(sparql) {
 
 /**
  * Parse Wikidata SPARQL results into credit entries.
+ * The role is passed in (not from SPARQL) since we query one role at a time.
  * Returns array of { movieQId, personQId, label, role, birthYear, deathYear, imdbId, birthName }
  */
-function parseCreditResults(results) {
+function parseCreditResults(results, role) {
   const credits = [];
 
   for (const binding of results.results?.bindings || []) {
     const movieQId = binding.movie?.value?.split('/').pop();
     const personQId = binding.person?.value?.split('/').pop();
     const label = binding.personLabel?.value;
-    const role = binding.role?.value;
 
-    if (!movieQId || !personQId || !label || !role) continue;
+    if (!movieQId || !personQId || !label) continue;
     // Skip unlabeled or Q-ID-only labels
     if (/^Q\d+$/i.test(label)) continue;
 
@@ -513,7 +524,7 @@ for (let i = 0; i < totalYears; i++) {
       continue;
     }
 
-    // ─── Batch Wikidata queries for credits ────────────────────────────────
+    // ─── Batch Wikidata queries for credits (per-role) ───────────────────────
 
     const qIds = [...movieLookup.keys()];
     const batches = [];
@@ -521,41 +532,57 @@ for (let i = 0; i < totalYears; i++) {
       batches.push(qIds.slice(j, j + batchSize));
     }
 
-    log(`Processing ${batches.length} batches (${batchSize} movies/batch)...`);
+    log(`Processing ${batches.length} batches (${batchSize} movies/batch, ${ROLES.length} role queries each)...`);
 
     const allCreditResults = [];
     const batchProgress = createProgress(batches.length, 'Batches');
 
     for (let bIdx = 0; bIdx < batches.length; bIdx++) {
-      // Check query cap
-      if (totalQueriesMade >= maxQueries) {
-        log(`  ⚠ Query cap reached (${maxQueries}). Stopping.`);
+      // Check query cap (each batch uses 5 queries)
+      if (totalQueriesMade + ROLES.length > maxQueries) {
+        log(`  ⚠ Query cap would be exceeded (${totalQueriesMade}/${maxQueries}). Stopping.`);
         queryCapped = true;
         break;
       }
 
       const batch = batches[bIdx];
-      const sparql = buildCreditsQuery(batch);
 
-      // Rate limiting
+      // Rate limiting between batches (not before the first)
       if (bIdx > 0) {
         await new Promise(r => setTimeout(r, delay * 1000));
       }
 
-      try {
-        const result = await queryWikidataWithBackoff(sparql);
-        totalQueriesMade++;
-        const credits = parseCreditResults(result);
-        allCreditResults.push(...credits);
+      // Query each role separately
+      let batchCredits = 0;
+      for (let rIdx = 0; rIdx < ROLES.length; rIdx++) {
+        const { role, property } = ROLES[rIdx];
 
-        batchProgress.tick(`${allCreditResults.length} credits`);
-
-        if ((bIdx + 1) % 10 === 0 || bIdx === batches.length - 1) {
-          batchProgress.log(`  Batch ${bIdx + 1}/${batches.length}: ${allCreditResults.length} raw credits so far`);
+        // 1s delay between role queries within a batch (not before first)
+        if (rIdx > 0) {
+          await new Promise(r => setTimeout(r, 1000));
         }
-      } catch (err) {
-        batchProgress.tick(`failed`);
-        batchProgress.log(`  ⚠ Batch ${bIdx + 1} failed: ${err.message}`);
+
+        const sparql = buildRoleQuery(batch, property);
+
+        try {
+          process.stdout.write(`  ${role}s... `);
+          const result = await queryWikidataWithBackoff(sparql);
+          totalQueriesMade++;
+          const credits = parseCreditResults(result, role);
+          allCreditResults.push(...credits);
+          batchCredits += credits.length;
+          process.stdout.write(`${credits.length}\n`);
+        } catch (err) {
+          totalQueriesMade++;
+          process.stdout.write(`failed\n`);
+          batchProgress.log(`  ⚠ Batch ${bIdx + 1} ${role} failed: ${err.message}`);
+        }
+      }
+
+      batchProgress.tick(`${allCreditResults.length} credits`);
+
+      if ((bIdx + 1) % 5 === 0 || bIdx === batches.length - 1) {
+        batchProgress.log(`  Batch ${bIdx + 1}/${batches.length}: ${allCreditResults.length} raw credits so far (${totalQueriesMade} queries)`);
       }
     }
 
