@@ -154,7 +154,9 @@ node functions/scripts/cleanup-qids.mjs --repo=mmdb-2026 --dry-run
 node functions/scripts/cleanup-qids.mjs --repo=mmdb-2026
 ```
 
-Scripts authenticate as `mimir-media-db[bot]` via GitHub App. PRs are created for audit trail, then immediately squash-merged. CI builds indexes post-merge using App token to bypass branch protection. See [functions/README.md](functions/README.md#scripts).
+Scripts authenticate as `mimir-media-db[bot]` via GitHub App. PRs are created for audit trail, then immediately squash-merged. CI builds indexes post-merge using App token to bypass branch protection.
+
+📖 **[Full scripts reference →](docs/scripts.md)** — All 17 scripts with flags, examples, workflows, and recovery guidance.
 
 ## Tech Stack
 
