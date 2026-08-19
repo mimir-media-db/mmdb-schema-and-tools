@@ -63,11 +63,13 @@ if (isNaN(year) || year < 1888 || year > new Date().getFullYear()) {
 const envPath = resolve(__dirname, '..', '.env');
 let token;
 let authMethod;
+let tokenManager;
 
 try {
   const auth = await loadGitHubAuth(envPath);
   token = auth.token;
   authMethod = auth.method;
+  tokenManager = auth.manager;
 } catch (err) {
   if (!dryRun) {
     console.error(`Auth error: ${err.message}`);
@@ -95,7 +97,7 @@ try {
   const result = await rescanYear({
     year,
     repo,
-    token,
+    token: tokenManager || token,
     limit,
     includeSeries,
     dryRun,

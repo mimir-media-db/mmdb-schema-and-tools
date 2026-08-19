@@ -37,6 +37,43 @@ export function isUsableTitle(title) {
   return slug.length >= 2;
 }
 
+/**
+ * Determines whether a person name is usable for ingestion.
+ * Rejects names that would produce an empty or invalid slug (must start with a-z).
+ * Names with only non-Latin characters (CJK, Arabic, etc.) without a Latin
+ * fallback (birthName) will be rejected.
+ */
+export function isUsablePersonName(name) {
+  if (!name) return false;
+  if (QID_PATTERN.test(name)) return false;
+  const slug = name.toLowerCase().normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, '')
+    .trim().replace(/\s+/g, '_');
+  // Must produce a slug that starts with a letter and has ≥2 chars
+  if (slug.length < 2) return false;
+  if (/^[^a-z]/.test(slug)) {
+    // Strip leading non-alpha and check again
+    const stripped = slug.replace(/^[^a-z]+/, '');
+    return stripped.length >= 2;
+  }
+  return true;
+}
+
+/**
+ * Validates that a person's birth/death years are within the modern era.
+ * Returns false if either year is before 1800 (ancient/medieval person).
+ *
+ * @param {number|null|undefined} birthYear
+ * @param {number|null|undefined} deathYear
+ * @returns {boolean} true if valid (modern era or no year data)
+ */
+export function isValidPersonYear(birthYear, deathYear) {
+  if (birthYear && birthYear < 1800) return false;
+  if (deathYear && deathYear < 1800) return false;
+  return true;
+}
+
 // ─── Retry helper ────────────────────────────────────────────────────────────
 
 /**
@@ -79,45 +116,131 @@ export async function retryOnServerError(fn, opts = {}) {
 
 // ─── GitHub API helpers ──────────────────────────────────────────────────────
 
-export function createGitHubClient(token) {
-  const headers = {
-    'Authorization': `Bearer ${token}`,
-    'Accept': 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-  };
+/**
+ * Create a GitHub API client that supports both static tokens and token managers.
+ *
+ * @param {string|object} tokenOrManager - A static token string OR a token manager
+ *   with getToken()/invalidate() methods (from createTokenManager).
+ *   If a manager is provided, tokens are refreshed on each request and 401s
+ *   trigger an automatic retry with a fresh token.
+ */
+export function createGitHubClient(tokenOrManager) {
+  const isManager = typeof tokenOrManager === 'object' && tokenOrManager !== null && typeof tokenOrManager.getToken === 'function';
+  const getToken = isManager
+    ? () => tokenOrManager.getToken()
+    : () => Promise.resolve(tokenOrManager);
 
   async function ghApi(method, path, body) {
+    const token = await getToken();
+    const headers = {
+      'Authorization': `Bearer ${token}`,
+      'Accept': 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    };
     const res = await fetch(`https://api.github.com${path}`, {
       method,
       headers,
       ...(body && { body: JSON.stringify(body) }),
     });
     const data = await res.json().catch(() => ({}));
+
+    // If we get 401 and have a manager, invalidate token and retry once
+    if (res.status === 401 && isManager) {
+      tokenOrManager.invalidate();
+      const freshToken = await getToken();
+      const retryRes = await fetch(`https://api.github.com${path}`, {
+        method,
+        headers: {
+          'Authorization': `Bearer ${freshToken}`,
+          'Accept': 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+        },
+        ...(body && { body: JSON.stringify(body) }),
+      });
+      const retryData = await retryRes.json().catch(() => ({}));
+      return { status: retryRes.status, ok: retryRes.ok, data: retryData };
+    }
+
     return { status: res.status, ok: res.ok, data };
   }
 
   async function ghGraphQL(query, variables = {}) {
+    const token = await getToken();
+    const headers = {
+      'Authorization': `Bearer ${token}`,
+      'Accept': 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    };
     const res = await fetch('https://api.github.com/graphql', {
       method: 'POST',
       headers,
       body: JSON.stringify({ query, variables }),
     });
-    return res.json();
+    const data = await res.json();
+
+    // Retry on auth error for GraphQL too
+    if (data.message === 'Bad credentials' && isManager) {
+      tokenOrManager.invalidate();
+      const freshToken = await getToken();
+      const retryRes = await fetch('https://api.github.com/graphql', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${freshToken}`,
+          'Accept': 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+        },
+        body: JSON.stringify({ query, variables }),
+      });
+      return retryRes.json();
+    }
+
+    return data;
   }
 
   return { ghApi, ghGraphQL };
 }
 
 export async function getDefaultBranchSha(ghApi, repo) {
-  // Retry up to 5 times with 2s delay — handles newly created repos where ref propagation is slow
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const { ok, data } = await ghApi('GET', `/repos/${ORG}/${repo}/git/ref/heads/master`);
-    if (ok && data.object?.sha) {
-      return data.object.sha;
+  // Retry with exponential backoff — handles newly created repos where ref propagation is slow
+  const maxAttempts = 8;
+  const baseDelay = 3000; // 3s initial
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    // Try 'master' first, fall back to 'main'
+    for (const branch of ['master', 'main']) {
+      const { ok, data } = await retryOnServerError(
+        () => ghApi('GET', `/repos/${ORG}/${repo}/git/ref/heads/${branch}`)
+      );
+      if (ok && data.object?.sha) {
+        return data.object.sha;
+      }
     }
-    if (attempt < 4) {
-      await new Promise(r => setTimeout(r, 2000));
+
+    if (attempt < maxAttempts - 1) {
+      // Exponential backoff: 3s, 6s, 12s, 24s, 48s, 60s, 60s (capped)
+      const delay = Math.min(baseDelay * Math.pow(2, attempt), 60000);
+      await new Promise(r => setTimeout(r, delay));
     }
+  }
+  return null;
+}
+
+/**
+ * Wait until a repo's default branch is accessible.
+ * Use after createYearRepo/createPeopleRepo to ensure propagation.
+ * @param {function} ghApi - GitHub API client
+ * @param {string} repo - Repository name
+ * @param {number} [timeoutMs=120000] - Max wait time in milliseconds
+ * @returns {Promise<string|null>} The SHA if successful, null if timeout
+ */
+export async function waitForRepo(ghApi, repo, timeoutMs = 120000) {
+  const startTime = Date.now();
+  const pollInterval = 5000; // 5s between checks
+
+  while (Date.now() - startTime < timeoutMs) {
+    const sha = await getDefaultBranchSha(ghApi, repo);
+    if (sha) return sha;
+    await new Promise(r => setTimeout(r, pollInterval));
   }
   return null;
 }
@@ -511,7 +634,7 @@ export function groupByFirstLetter(items) {
  * @param {object} options
  * @param {number} options.year - Target year to rescan
  * @param {string} options.repo - Target repo name (e.g. 'mmdb-2010')
- * @param {string} options.token - GitHub auth token
+ * @param {string|object} options.token - GitHub auth token string OR token manager
  * @param {number} [options.limit=2000] - Page size for paginated Wikidata queries
  * @param {boolean} [options.includeSeries=false] - Also rescan series
  * @param {boolean} [options.dryRun=false] - Don't create PR, just report
@@ -749,11 +872,15 @@ export function getPeopleRepo(personId) {
 
 /**
  * Check if a repo exists in the org.
+ * Throws on unexpected errors (e.g., 401 auth expiry) instead of returning false.
  */
 export async function repoExists(ghApi, repo) {
-  const { ok } = await retryOnServerError(
+  const { ok, status } = await retryOnServerError(
     () => ghApi('GET', `/repos/${ORG}/${repo}`),
   );
+  if (!ok && status !== 404) {
+    throw new Error(`Unexpected status ${status} checking repo ${repo} (possible auth expiry)`);
+  }
   return ok;
 }
 
@@ -955,6 +1082,208 @@ jobs:
       can_approve_pull_request_reviews: true,
     }),
   );
+
+  // 6. Final verification: wait for repo to be fully accessible
+  const verified = await waitForRepo(ghApi, repoName, 60000);
+  if (!verified) {
+    console.warn(`  ⚠ Repo ${repoName} created but master ref not yet accessible`);
+  }
+
+  return repoName;
+}
+
+/**
+ * Create a new alphabetical people repo with standard structure.
+ * Similar to createYearRepo but adapted for people data.
+ *
+ * @param {function} ghApi - GitHub API client
+ * @param {string} letter - Single lowercase letter (a-z)
+ * @returns {Promise<string>} The created repo name
+ */
+export async function createPeopleRepo(ghApi, letter) {
+  const repoName = `mmdb-people-${letter}`;
+  const upperLetter = letter.toUpperCase();
+
+  // 1. Create the repo with auto_init
+  const { ok, data } = await retryOnServerError(
+    () => ghApi('POST', `/orgs/${ORG}/repos`, {
+      name: repoName,
+      description: `MMDB People — ${upperLetter}`,
+      visibility: 'public',
+      auto_init: true,
+      has_issues: true,
+      has_projects: false,
+      has_wiki: false,
+      allow_squash_merge: true,
+      allow_merge_commit: false,
+      allow_rebase_merge: false,
+      delete_branch_on_merge: true,
+      allow_auto_merge: true,
+    }),
+  );
+
+  if (!ok) {
+    throw new Error(`Failed to create repo ${repoName}: ${data.message || JSON.stringify(data)}`);
+  }
+
+  // Wait for GitHub to propagate
+  await new Promise(r => setTimeout(r, 5000));
+
+  // 2. Rename default branch from 'main' to 'master'
+  await retryOnServerError(
+    () => ghApi('POST', `/repos/${ORG}/${repoName}/branches/main/rename`, {
+      new_name: 'master',
+    }),
+  );
+
+  await new Promise(r => setTimeout(r, 3000));
+
+  // 3. Commit the initial structure
+  const packageJson = {
+    name: `mmdb-people-${letter}`,
+    version: '1.0.0',
+    description: `MMDB people data — ${upperLetter}`,
+    private: true,
+    devDependencies: {
+      'mmdb-validate': '^1.0.0',
+    },
+  };
+
+  const validateWorkflow = `name: Validate and Build Indexes
+
+on:
+  pull_request:
+    branches: [master]
+    paths: ['data/**']
+  push:
+    branches: [master]
+    paths: ['data/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    if: github.actor != 'github-actions[bot]'
+    steps:
+      - name: Checkout data repo
+        uses: actions/checkout@v4
+        with:
+          path: data
+          persist-credentials: false
+
+      - name: Checkout tools repo
+        uses: actions/checkout@v4
+        with:
+          repository: mimir-media-db/mmdb-schema-and-tools
+          ref: master
+          path: tools
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build tools
+        run: |
+          cd tools
+          npm install
+          npm run build
+
+      - name: Validate data
+        run: |
+          cd data
+          node ../tools/dist/validate-repo.js --schema=person
+
+      - name: Build indexes
+        run: |
+          cd data
+          node ../tools/dist/build-indexes.js
+
+      - name: Check for index changes
+        id: check_changes
+        run: |
+          cd data
+          git diff --exit-code data/*/index.json || echo "changed=true" >> \$GITHUB_OUTPUT
+
+      - name: Generate App token
+        if: steps.check_changes.outputs.changed == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: \${{ secrets.MMDB_BOT_APP_ID }}
+          private-key: \${{ secrets.MMDB_BOT_PRIVATE_KEY }}
+
+      - name: Commit and push index updates
+        if: steps.check_changes.outputs.changed == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        run: |
+          cd data
+          git add data/*/index.json 2>/dev/null || true
+          git config user.name "mmdb-bot[bot]"
+          git config user.email "mmdb-bot[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:\${{ steps.app-token.outputs.token }}@github.com/\${{ github.repository }}.git"
+          git commit -m "chore: update indexes [skip ci]" || echo "Nothing to commit"
+          git push
+`;
+
+  const files = [
+    { path: 'README.md', content: `# MMDB People — ${upperLetter}\n\nPeople whose slug starts with '${letter}'.\n` },
+    { path: 'package.json', content: JSON.stringify(packageJson, null, 2) + '\n' },
+    { path: 'data/people/index.json', content: '[]\n' },
+    { path: '.github/workflows/validate.yml', content: validateWorkflow },
+  ];
+
+  // Push files (get sha for existing ones like README from auto_init)
+  for (const file of files) {
+    let sha;
+    try {
+      const { ok: getOk, data: getData } = await retryOnServerError(
+        () => ghApi('GET', `/repos/${ORG}/${repoName}/contents/${file.path}?ref=master`),
+      );
+      if (getOk && getData.sha) {
+        sha = getData.sha;
+      }
+    } catch { /* file doesn't exist yet */ }
+
+    const { ok: putOk, data: putData } = await retryOnServerError(
+      () => ghApi('PUT', `/repos/${ORG}/${repoName}/contents/${file.path}`, {
+        message: `chore: initialize ${file.path}`,
+        content: Buffer.from(file.content).toString('base64'),
+        branch: 'master',
+        ...(sha && { sha }),
+      }),
+    );
+    if (!putOk) {
+      console.warn(`  ⚠ Failed to push ${file.path}: ${putData.message || JSON.stringify(putData)}`);
+    }
+    await new Promise(r => setTimeout(r, GITHUB_RATE_LIMIT_MS));
+  }
+
+  // 4. Set up branch protection (no required_status_checks — matches current setup)
+  await retryOnServerError(
+    () => ghApi('PUT', `/repos/${ORG}/${repoName}/branches/master/protection`, {
+      required_status_checks: null,
+      enforce_admins: false,
+      required_pull_request_reviews: null,
+      restrictions: null,
+    }),
+  );
+
+  // 5. Set workflow permissions
+  await retryOnServerError(
+    () => ghApi('PUT', `/repos/${ORG}/${repoName}/actions/permissions/workflow`, {
+      default_workflow_permissions: 'write',
+      can_approve_pull_request_reviews: true,
+    }),
+  );
+
+  // 6. Final verification: wait for repo to be fully accessible
+  const verified = await waitForRepo(ghApi, repoName, 60000);
+  if (!verified) {
+    console.warn(`  ⚠ Repo ${repoName} created but master ref not yet accessible`);
+  }
 
   return repoName;
 }

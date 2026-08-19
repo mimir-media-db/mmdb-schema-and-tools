@@ -149,11 +149,41 @@ export async function getInstallationToken(appId, privateKey, installationId) {
 }
 
 /**
+ * Creates a self-refreshing token manager for GitHub App auth.
+ * Tokens auto-refresh after 50 minutes (GitHub expires them at 60).
+ *
+ * @param {string} appId - GitHub App ID
+ * @param {string} privateKey - PEM private key
+ * @param {string} installationId - GitHub App Installation ID
+ * @returns {{getToken: () => Promise<string>, invalidate: () => void}}
+ */
+export function createTokenManager(appId, privateKey, installationId) {
+  let token = null;
+  let tokenCreatedAt = 0;
+  const TOKEN_TTL_MS = 50 * 60 * 1000; // 50 minutes
+
+  return {
+    async getToken() {
+      const now = Date.now();
+      if (!token || (now - tokenCreatedAt) > TOKEN_TTL_MS) {
+        token = await getInstallationToken(appId, privateKey, installationId);
+        tokenCreatedAt = now;
+      }
+      return token;
+    },
+    invalidate() {
+      token = null;
+      tokenCreatedAt = 0;
+    },
+  };
+}
+
+/**
  * Load GitHub auth token from .env file.
  * Prefers GitHub App auth, falls back to PAT.
  *
  * @param {string} envPath - Path to .env file
- * @returns {Promise<{token: string, method: string}>}
+ * @returns {Promise<{token: string, manager: object|null, method: string}>}
  */
 export async function loadGitHubAuth(envPath) {
   const { readFileSync } = await import('fs');
@@ -179,17 +209,18 @@ export async function loadGitHubAuth(envPath) {
   const installationId = envVars.GITHUB_APP_INSTALLATION_ID || process.env.GITHUB_APP_INSTALLATION_ID;
 
   if (appId && privateKey && installationId) {
-    const token = await getInstallationToken(appId, privateKey, installationId);
-    return { token, method: 'GitHub App (mimir-media-db[bot])' };
+    const manager = createTokenManager(appId, privateKey, installationId);
+    const token = await manager.getToken();
+    return { token, manager, method: 'GitHub App (mimir-media-db[bot])' };
   }
 
-  // Fallback to PAT
+  // Fallback to PAT (no manager needed, PATs don't expire during a run)
   const pat = envVars.GITHUB_TOKEN || process.env.GITHUB_TOKEN;
   if (pat) {
     // Strip surrounding quotes from PAT if present
     const cleanPat = pat.replace(/^["']|["']$/g, '');
-    return { token: cleanPat, method: 'Personal token (fallback)' };
+    return { token: cleanPat, manager: null, method: 'Personal token (fallback)' };
   }
 
-  return { token: null, method: null };
+  return { token: null, manager: null, method: null };
 }

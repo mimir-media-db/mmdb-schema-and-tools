@@ -12,6 +12,7 @@
  */
 
 import { loadGitHubAuth } from './lib/github-app-auth.mjs';
+import { createProgress } from './lib/progress.mjs';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 
@@ -141,6 +142,7 @@ async function main() {
   const results = [];
   let totalSplitFiles = 0;
   const allSplitFilenames = new Set();
+  const letterProgress = createProgress(LETTERS.length, 'Letters');
 
   for (const letter of LETTERS) {
     const repo = `mmdb-people-${letter}`;
@@ -197,8 +199,11 @@ async function main() {
       results.push({ letter, repo, exists: false, error: err.message });
     }
 
+    letterProgress.tick(`${letter}`);
     await sleep(DELAY_MS);
   }
+
+  letterProgress.done();
 
   // ─── Phase 2: Get original mmdb-people total ──────────────────────────────────
 

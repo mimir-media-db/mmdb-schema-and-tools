@@ -31,6 +31,7 @@ import { resolve, dirname } from 'path';
 import { writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { loadGitHubAuth } from './lib/github-app-auth.mjs';
+import { createProgress } from './lib/progress.mjs';
 import {
   rescanYear,
   repoExists,
@@ -119,12 +120,14 @@ function formatDuration(ms) {
 const envPath = resolve(__dirname, '..', '.env');
 let token;
 let authMethod;
+let tokenManager;
 
 if (!dryRun) {
   try {
     const auth = await loadGitHubAuth(envPath);
     token = auth.token;
     authMethod = auth.method;
+    tokenManager = auth.manager;
   } catch (err) {
     console.error(`Auth error: ${err.message}`);
     process.exit(1);
@@ -163,7 +166,9 @@ let totalSeries = 0;
 const failedYears = [];
 const skippedYears = [];
 
-const { ghApi } = token ? createGitHubClient(token) : { ghApi: null };
+const { ghApi } = token ? createGitHubClient(tokenManager || token) : { ghApi: null };
+
+const yearProgress = createProgress(totalYears, 'Years');
 
 for (let i = 0; i < totalYears; i++) {
   const year = fromYear + i;
@@ -212,7 +217,7 @@ for (let i = 0; i < totalYears; i++) {
     const result = await rescanYear({
       year,
       repo,
-      token,
+      token: tokenManager || token,
       limit,
       includeSeries,
       dryRun: false,
@@ -246,6 +251,8 @@ for (let i = 0; i < totalYears; i++) {
 
   // ─── Delay between years ───────────────────────────────────────────────────
 
+  yearProgress.tick(`Year ${year}`);
+
   if (i < totalYears - 1 && !dryRun) {
     log(`Waiting ${delay}s...`);
     await new Promise(r => setTimeout(r, delay * 1000));
@@ -253,6 +260,8 @@ for (let i = 0; i < totalYears; i++) {
 }
 
 // ─── Final summary ───────────────────────────────────────────────────────────
+
+yearProgress.done();
 
 const completedAt = new Date().toISOString();
 const totalDuration = Date.now() - new Date(startedAt).getTime();

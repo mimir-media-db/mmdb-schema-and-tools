@@ -9,6 +9,7 @@
  */
 
 import { loadGitHubAuth } from './lib/github-app-auth.mjs';
+import { createProgress } from './lib/progress.mjs';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 
@@ -116,6 +117,8 @@ async function main() {
 
   const results = [];
   const mismatches = [];
+  const totalYears = END_YEAR - START_YEAR + 1;
+  const repoProgress = createProgress(totalYears, 'Repos');
 
   for (let year = START_YEAR; year <= END_YEAR; year++) {
     const repo = `mmdb-${year}`;
@@ -155,8 +158,11 @@ async function main() {
       results.push({ year, repo, error: err.message });
     }
 
+    repoProgress.tick(`mmdb-${year}`);
     await sleep(DELAY_MS);
   }
+
+  repoProgress.done();
 
   // Summary table
   console.log('\n' + '='.repeat(80));
