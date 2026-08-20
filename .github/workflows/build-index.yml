@@ -1,0 +1,49 @@
+name: Build Combined Index
+
+on:
+  schedule:
+    - cron: '0 5 * * *'   # Daily at 5 AM UTC (before meta update at 6 AM)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Generate App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.MMDB_BOT_APP_ID }}
+          private-key: ${{ secrets.MMDB_BOT_PRIVATE_KEY }}
+
+      - name: Build combined index
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          cd functions
+          node scripts/build-combined-index.mjs --output ../combined-index.json.gz
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          # Delete existing 'latest' release if present
+          gh release delete latest --yes 2>/dev/null || true
+          # Delete the tag too
+          git push origin :refs/tags/latest 2>/dev/null || true
+          # Create new release
+          gh release create latest \
+            --title "Combined Index ($(date +%Y-%m-%d))" \
+            --notes "Auto-built combined index of all MMDB movies and series." \
+            combined-index.json.gz

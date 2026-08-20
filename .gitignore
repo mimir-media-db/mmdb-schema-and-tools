@@ -21,3 +21,4 @@ tools/**/*.d.ts
 fix-people-filenames-results.json
 remove-ancient-people-results.json
 build-credits-results.json
+combined-index.json.gz
