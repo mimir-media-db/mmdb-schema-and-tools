@@ -34,6 +34,13 @@ jobs:
           cd functions
           node scripts/build-combined-index.mjs --output ../combined-index.json.gz
 
+      - name: Build combined credits index
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          cd functions
+          node scripts/build-combined-credits-index.mjs --output ../combined-credits-index.json.gz
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -45,5 +52,6 @@ jobs:
           # Create new release
           gh release create latest \
             --title "Combined Index ($(date +%Y-%m-%d))" \
-            --notes "Auto-built combined index of all MMDB movies and series." \
-            combined-index.json.gz
+            --notes "Auto-built combined index of all MMDB movies, series, and credits." \
+            combined-index.json.gz \
+            combined-credits-index.json.gz
