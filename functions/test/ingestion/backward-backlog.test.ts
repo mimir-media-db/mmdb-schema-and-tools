@@ -31,6 +31,11 @@ const DEFAULT_STATE: IngestionState = {
     started_at: null,
     run_id: null,
   },
+  credits_lock: {
+    running: false,
+    started_at: null,
+    run_id: null,
+  },
   consecutive_empty_runs: 0,
   current_year_offset_movies: 0,
   current_year_offset_series: 0,

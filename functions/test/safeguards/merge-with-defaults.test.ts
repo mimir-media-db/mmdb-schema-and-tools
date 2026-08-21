@@ -25,6 +25,11 @@ const DEFAULT_STATE: IngestionState = {
     started_at: null,
     run_id: null,
   },
+  credits_lock: {
+    running: false,
+    started_at: null,
+    run_id: null,
+  },
   consecutive_empty_runs: 0,
   current_year_offset_movies: 0,
   current_year_offset_series: 0,
@@ -122,6 +127,11 @@ describe('Merge With Defaults', () => {
           started_at: '2026-07-10T08:00:00Z',
           run_id: 'abc-123',
         },
+        credits_lock: {
+          running: false,
+          started_at: null,
+          run_id: null,
+        },
         consecutive_empty_runs: 1,
         current_year_offset_movies: 200,
         current_year_offset_series: 100,
@@ -191,6 +201,41 @@ describe('Merge With Defaults', () => {
         started_at: null,
         run_id: null,
       });
+    });
+
+    it('should handle missing credits_lock gracefully (state migration)', () => {
+      const raw: Partial<IngestionState> = {
+        backlog_offset: 5,
+        lock: {
+          running: true,
+          started_at: '2026-08-01T00:00:00Z',
+          run_id: 'test-run',
+        },
+      };
+
+      const result = mergeStateWithDefaults(raw, DEFAULT_STATE);
+
+      assert.deepStrictEqual(result.credits_lock, {
+        running: false,
+        started_at: null,
+        run_id: null,
+      });
+    });
+
+    it('should preserve existing credits_lock state', () => {
+      const raw: Partial<IngestionState> = {
+        credits_lock: {
+          running: true,
+          started_at: '2026-08-20T10:00:00Z',
+          run_id: 'credits-run-456',
+        },
+      };
+
+      const result = mergeStateWithDefaults(raw, DEFAULT_STATE);
+
+      assert.strictEqual(result.credits_lock.running, true);
+      assert.strictEqual(result.credits_lock.started_at, '2026-08-20T10:00:00Z');
+      assert.strictEqual(result.credits_lock.run_id, 'credits-run-456');
     });
   });
 });

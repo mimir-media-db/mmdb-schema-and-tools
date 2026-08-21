@@ -658,6 +658,41 @@ export class GitHubClient {
     throw new Error(`Could not read file content: ${path}`);
   }
 
+  /**
+   * Download a repo tarball (gzipped tar archive) as a Buffer.
+   * Uses the authenticated Octokit instance to follow redirects.
+   */
+  async downloadTarball(repo: string, ref: string = 'master'): Promise<Buffer> {
+    const response = await this.octokit.request('GET /repos/{owner}/{repo}/tarball/{ref}', {
+      owner: this.owner,
+      repo,
+      ref,
+      request: {
+        parseSuccessResponseBody: false,
+      },
+    });
+
+    const stream = response.data as unknown as ReadableStream<Uint8Array>;
+    const reader = stream.getReader();
+    const chunks: Uint8Array[] = [];
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) chunks.push(value);
+    }
+
+    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const result = Buffer.alloc(totalLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      result.set(chunk, offset);
+      offset += chunk.length;
+    }
+
+    return result;
+  }
+
   async deleteFile(repo: string, branch: string, path: string, message: string): Promise<void> {
     // Get file SHA first
     const { data } = await this.octokit.repos.getContent({

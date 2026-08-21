@@ -72,5 +72,9 @@ export function mergeStateWithDefaults(raw: Partial<IngestionState>, defaults: I
       ...defaults.lock,
       ...(raw.lock || {}),
     },
+    credits_lock: {
+      ...defaults.credits_lock,
+      ...(raw.credits_lock || {}),
+    },
   };
 }

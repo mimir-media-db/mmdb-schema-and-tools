@@ -11,9 +11,10 @@ import { onRequest } from 'firebase-functions/v2/https';
 import { logger } from 'firebase-functions/v2';
 import { runIngestion } from './ingestion/orchestrator.js';
 import { runCurrentYearIngestion } from './ingestion/current-year.js';
+import { runCreditsIngestion } from './ingestion/credits.js';
 import { runCleanup } from './ingestion/cleanup.js';
 import { isIngestionPaused } from './ingestion/safeguards.js';
-import { SCHEDULE_CRON, SCHEDULE_TIMEZONE, CURRENT_YEAR_SCHEDULE, CLEANUP_SCHEDULE } from './config.js';
+import { SCHEDULE_CRON, SCHEDULE_TIMEZONE, CURRENT_YEAR_SCHEDULE, CREDITS_SCHEDULE, CLEANUP_SCHEDULE } from './config.js';
 
 // Environment-based dry run flag
 const DRY_RUN = process.env.MMDB_DRY_RUN === 'true';
@@ -123,9 +124,14 @@ export const mmdbIngestManual = onRequest(
     logger.info('MMDB manual ingestion triggered', { dryRun, mode: mode || 'backlog' });
 
     try {
-      const result = mode === 'currentYear'
-        ? await runCurrentYearIngestion(dryRun)
-        : await runIngestion(dryRun);
+      let result;
+      if (mode === 'currentYear') {
+        result = await runCurrentYearIngestion(dryRun);
+      } else if (mode === 'credits') {
+        result = await runCreditsIngestion(dryRun);
+      } else {
+        result = await runIngestion(dryRun);
+      }
 
       const durationMs = Date.now() - startTime;
 
@@ -202,6 +208,64 @@ export const mmdbIngestCurrentYear = onSchedule(
     } catch (error: any) {
       const durationMs = Date.now() - startTime;
       logger.error('MMDB current-year ingestion failed', {
+        durationMs,
+        error: error.message,
+        stack: error.stack,
+      });
+      throw error;
+    }
+  }
+);
+
+/**
+ * Scheduled credits ingestion function.
+ *
+ * Runs nightly at 3 AM (1 hour after current-year run) to enrich
+ * movie/series entries with cast and crew credits from Wikidata.
+ * Shares the concurrency lock with other ingestion functions.
+ */
+export const mmdbIngestCredits = onSchedule(
+  {
+    schedule: CREDITS_SCHEDULE,
+    timeZone: SCHEDULE_TIMEZONE,
+    timeoutSeconds: 540,
+    memory: '512MiB',
+    retryCount: 0,
+  },
+  async () => {
+    // ─── Kill Switch ─────────────────────────────────────────────────────────
+    if (isIngestionPaused()) {
+      logger.info('Ingestion is paused via INGESTION_PAUSED env var — skipping credits run');
+      return;
+    }
+
+    const startTime = Date.now();
+    logger.info('MMDB credits ingestion triggered', {
+      dryRun: DRY_RUN,
+      schedule: CREDITS_SCHEDULE,
+    });
+
+    try {
+      const result = await runCreditsIngestion(DRY_RUN);
+
+      const durationMs = Date.now() - startTime;
+      logger.info('MMDB credits ingestion completed', {
+        durationMs,
+        durationSeconds: Math.round(durationMs / 1000),
+        moviesIngested: result.moviesIngested,
+        seriesIngested: result.seriesIngested,
+        peopleIngested: result.peopleIngested,
+        prsCreated: result.prsCreated,
+        errorCount: result.errors.length,
+        errors: result.errors.slice(0, 10),
+      });
+
+      if (result.errors.length > 0) {
+        logger.warn(`Credits ingestion completed with ${result.errors.length} errors`);
+      }
+    } catch (error: any) {
+      const durationMs = Date.now() - startTime;
+      logger.error('MMDB credits ingestion failed', {
         durationMs,
         error: error.message,
         stack: error.stack,

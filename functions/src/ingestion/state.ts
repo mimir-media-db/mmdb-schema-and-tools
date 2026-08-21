@@ -13,6 +13,12 @@ import { createOctokit } from './auth.js';
 const META_REPO = 'mmdb-meta';
 const STATE_PATH = 'ingestion/state.json';
 
+export interface LockState {
+  running: boolean;
+  started_at: string | null;
+  run_id: string | null;
+}
+
 export interface IngestionState {
   backlog_offset: number;
   backlog_current_year: number;
@@ -25,11 +31,8 @@ export interface IngestionState {
     series: number;
     people: number;
   };
-  lock: {
-    running: boolean;
-    started_at: string | null;
-    run_id: string | null;
-  };
+  lock: LockState;
+  credits_lock: LockState;
   consecutive_empty_runs: number;
   repos_created_this_run?: number;
   last_repo_created?: string | null;
@@ -52,6 +55,11 @@ const DEFAULT_STATE: IngestionState = {
     people: 0,
   },
   lock: {
+    running: false,
+    started_at: null,
+    run_id: null,
+  },
+  credits_lock: {
     running: false,
     started_at: null,
     run_id: null,
@@ -287,4 +295,56 @@ export async function releaseLock(): Promise<void> {
     },
   });
   logger.info('Lock released');
+}
+
+/**
+ * Acquire the independent credits lock.
+ * This lock is separate from the main ingestion lock, allowing credits
+ * ingestion to run concurrently with title ingestion.
+ * Returns { acquired: true } if lock was obtained, or { acquired: false, reason } if not.
+ */
+export async function acquireCreditsLock(): Promise<{ acquired: boolean; reason?: string }> {
+  const state = await getState();
+
+  const decision = shouldAcquireLock(state.credits_lock);
+
+  if (!decision.canAcquire) {
+    return {
+      acquired: false,
+      reason: decision.reason,
+    };
+  }
+
+  if (decision.isStale) {
+    logger.warn('Breaking stale credits lock', {
+      run_id: state.credits_lock.run_id,
+      started_at: state.credits_lock.started_at,
+    });
+  }
+
+  const runId = crypto.randomUUID();
+  await updateState({
+    credits_lock: {
+      running: true,
+      started_at: new Date().toISOString(),
+      run_id: runId,
+    },
+  });
+
+  logger.info('Credits lock acquired', { run_id: runId });
+  return { acquired: true };
+}
+
+/**
+ * Release the credits lock after a credits run completes.
+ */
+export async function releaseCreditsLock(): Promise<void> {
+  await updateState({
+    credits_lock: {
+      running: false,
+      started_at: null,
+      run_id: null,
+    },
+  });
+  logger.info('Credits lock released');
 }

@@ -86,6 +86,9 @@ export const RECENT_MODIFIED_LIMIT = 200;
 /** Languages for Wikidata label service (priority order) */
 export const LABEL_LANGUAGES = 'en,es,fr,de,pt,it,ja,ko,zh,ar,hi,ru';
 
+/** Nightly schedule for credits ingestion (1 hour after current-year run) */
+export const CREDITS_SCHEDULE = 'every day 03:00';
+
 /** Weekly cleanup schedule */
 export const CLEANUP_SCHEDULE = 'every sunday 04:00';
 

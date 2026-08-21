@@ -57,14 +57,19 @@ import {
   isUsablePersonName,
   isValidPersonYear,
 } from './lib/rescan-core.mjs';
+import {
+  ROLES,
+  queryCreditsForMovies,
+  buildCreditEntries,
+  buildCreditsJson,
+  normalizePerson,
+  getPersonFilePath,
+  buildRoleQuery,
+  queryWikidataWithBackoff,
+  parseCreditResults,
+} from './lib/credits-core.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-
-// ─── Constants ───────────────────────────────────────────────────────────────
-
-const WIKIDATA_ENDPOINT = 'https://query.wikidata.org/sparql';
-const USER_AGENT = 'MMDB-Ingestion/1.0.0 (https://github.com/mimir-media-db)';
-const LABEL_LANGUAGES = 'en,es,fr,de,pt,it,ja,ko,zh,ar,hi,ru';
 
 // ─── Parse arguments ─────────────────────────────────────────────────────────
 
@@ -145,189 +150,6 @@ function formatDuration(ms) {
   const hours = Math.floor(minutes / 60);
   const mins = minutes % 60;
   return `${hours}h ${mins}m`;
-}
-
-// ─── Person normalization ────────────────────────────────────────────────────
-
-function generatePersonSlug(name) {
-  return name.toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9\s]/g, '')
-    .trim().replace(/\s+/g, '_');
-}
-
-function generatePersonId(name) {
-  return `p_${generatePersonSlug(name)}`;
-}
-
-function normalizePerson(wikiPerson) {
-  // Skip ancient people (pre-1800)
-  if (!isValidPersonYear(wikiPerson.birthYear, wikiPerson.deathYear)) {
-    return null;
-  }
-
-  let nameForSlug = wikiPerson.label;
-  const displayName = wikiPerson.label;
-  const alsoKnownAs = [];
-
-  // If label starts with non-alpha, try birth name for slug
-  const testSlug = generatePersonSlug(nameForSlug);
-  if (/^[^a-z]/.test(testSlug) && wikiPerson.birthName) {
-    nameForSlug = wikiPerson.birthName;
-    alsoKnownAs.push(wikiPerson.birthName);
-  }
-
-  // Final validation via isUsablePersonName
-  if (!isUsablePersonName(nameForSlug)) {
-    return null;
-  }
-
-  // Generate slug
-  let slug = generatePersonSlug(nameForSlug);
-  if (/^[^a-z]/.test(slug)) {
-    slug = slug.replace(/^[^a-z]+/, '');
-  }
-
-  if (!slug || slug.length < 2) {
-    return null;
-  }
-
-  const id = `p_${slug}`;
-  const today = new Date().toISOString().split('T')[0];
-
-  const person = {
-    schema_version: 1,
-    id,
-    name: displayName,
-    external_ids: { wikidata: wikiPerson.wikidataId },
-    last_updated: today,
-  };
-  if (alsoKnownAs.length > 0) person.also_known_as = alsoKnownAs;
-  if (wikiPerson.birthYear) person.birth_year = wikiPerson.birthYear;
-  if (wikiPerson.deathYear) person.death_year = wikiPerson.deathYear;
-  if (wikiPerson.imdbId && /^nm\d+$/.test(wikiPerson.imdbId)) {
-    person.external_ids.imdb = wikiPerson.imdbId;
-  }
-  return person;
-}
-
-function getPersonFilePath(person) {
-  return `data/people/${person.id}.json`;
-}
-
-// ─── Role definitions ─────────────────────────────────────────────────────────
-
-/**
- * Credits are queried per-role to avoid Wikidata 504 timeouts.
- * The old approach used a single UNION query with 5 roles × 30 movies × OPTIONALs
- * which was too complex. Now we run 5 simple queries per batch (one per role).
- *
- * --max-queries counts TOTAL Wikidata queries (5 per batch of movies).
- */
-const ROLES = [
-  { role: 'director', property: 'wdt:P57' },
-  { role: 'cast', property: 'wdt:P161' },
-  { role: 'writer', property: 'wdt:P58' },
-  { role: 'producer', property: 'wdt:P162' },
-  { role: 'composer', property: 'wdt:P86' },
-];
-
-// ─── SPARQL query builder (per-role, no UNION) ────────────────────────────────
-
-/**
- * Build a simple SPARQL query for a single role property.
- * Each query is lightweight: one property, no UNION, fast on Wikidata.
- */
-function buildRoleQuery(movieQIds, property) {
-  const values = movieQIds.map(id => `wd:${id}`).join(' ');
-  return `
-SELECT DISTINCT ?movie ?person ?personLabel ?birthDate ?deathDate ?imdb ?birthName
-WHERE {
-  VALUES ?movie { ${values} }
-  ?movie ${property} ?person.
-  ?person wdt:P31 wd:Q5.
-  OPTIONAL { ?person wdt:P345 ?imdb. }
-  OPTIONAL { ?person wdt:P569 ?birthDate. }
-  OPTIONAL { ?person wdt:P570 ?deathDate. }
-  OPTIONAL { ?person wdt:P1477 ?birthName. }
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "${LABEL_LANGUAGES}". }
-}
-`.trim();
-}
-
-// ─── Wikidata query with exponential backoff ─────────────────────────────────
-
-async function queryWikidataWithBackoff(sparql) {
-  const maxRetries = 5;
-  let retryDelay = 10000; // Start at 10s
-
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    const response = await fetch(WIKIDATA_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': USER_AGENT,
-      },
-      body: `query=${encodeURIComponent(sparql)}`,
-    });
-
-    if (response.ok) {
-      return response.json();
-    }
-
-    const status = response.status;
-    if (status === 429 || status >= 500) {
-      if (attempt < maxRetries) {
-        log(`  ⚠ Wikidata ${status} — retrying in ${retryDelay / 1000}s (attempt ${attempt}/${maxRetries})`);
-        await new Promise(r => setTimeout(r, retryDelay));
-        retryDelay *= 2;
-        continue;
-      }
-    }
-
-    const text = await response.text().catch(() => '');
-    throw new Error(`Wikidata query failed: ${status} ${response.statusText}\n${text.slice(0, 500)}`);
-  }
-}
-
-// ─── Parse SPARQL credit results ─────────────────────────────────────────────
-
-/**
- * Parse Wikidata SPARQL results into credit entries.
- * The role is passed in (not from SPARQL) since we query one role at a time.
- * Returns array of { movieQId, personQId, label, role, birthYear, deathYear, imdbId, birthName }
- */
-function parseCreditResults(results, role) {
-  const credits = [];
-
-  for (const binding of results.results?.bindings || []) {
-    const movieQId = binding.movie?.value?.split('/').pop();
-    const personQId = binding.person?.value?.split('/').pop();
-    const label = binding.personLabel?.value;
-
-    if (!movieQId || !personQId || !label) continue;
-    // Skip unlabeled or Q-ID-only labels
-    if (/^Q\d+$/i.test(label)) continue;
-
-    const birthDate = binding.birthDate?.value;
-    const deathDate = binding.deathDate?.value;
-    const imdbId = binding.imdb?.value;
-    const birthName = binding.birthName?.value;
-
-    credits.push({
-      movieQId,
-      personQId,
-      label,
-      role,
-      birthYear: birthDate ? new Date(birthDate).getFullYear() : undefined,
-      deathYear: deathDate ? new Date(deathDate).getFullYear() : undefined,
-      imdbId,
-      birthName,
-    });
-  }
-
-  return credits;
 }
 
 // ─── Tarball extraction ──────────────────────────────────────────────────────
