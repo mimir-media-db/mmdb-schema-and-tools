@@ -175,7 +175,7 @@ export function normalizeSeries(wikiSeries: WikidataSeries): MMDBSeries {
   }
 
   const today = new Date().toISOString().split('T')[0];
-  const id = generateSeriesId(wikiSeries.label);
+  const id = generateSeriesId(wikiSeries.label, wikiSeries.startYear);
 
   const series: MMDBSeries = {
     schema_version: 1,

@@ -481,8 +481,10 @@ export function generateMovieId(title, movieYear) {
   return `m_${generateSlug(title)}_${movieYear}`;
 }
 
-export function generateSeriesId(title) {
-  return `s_${generateSlug(title)}`;
+export function generateSeriesId(title, startYear) {
+  return startYear
+    ? `s_${generateSlug(title)}_${startYear}`
+    : `s_${generateSlug(title)}`;
 }
 
 export function normalizeMovie(wikiMovie) {
@@ -510,7 +512,7 @@ export function normalizeMovie(wikiMovie) {
 }
 
 export function normalizeSeries(wikiSeries) {
-  const id = generateSeriesId(wikiSeries.label);
+  const id = generateSeriesId(wikiSeries.label, wikiSeries.startYear);
   const today = new Date().toISOString().split('T')[0];
 
   const series = {
@@ -540,7 +542,10 @@ export function getMovieFilePath(movie) {
 
 export function getSeriesFilePath(series) {
   const slug = generateSlug(series.title);
-  return `data/series/${slug}.json`;
+  const year = series.start_year || series.startYear;
+  return year
+    ? `data/series/${slug}-${year}.json`
+    : `data/series/${slug}.json`;
 }
 
 // ─── Batch Commit (Git Trees API) ────────────────────────────────────────────

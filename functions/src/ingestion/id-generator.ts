@@ -24,7 +24,9 @@ export function generatePersonId(name: string): string {
   return `p_${slug}`;
 }
 
-export function generateSeriesId(title: string): string {
+export function generateSeriesId(title: string, startYear?: number | null): string {
   const slug = generateSlug(title);
-  return `s_${slug}`;
+  return startYear
+    ? `s_${slug}_${startYear}`
+    : `s_${slug}`;
 }

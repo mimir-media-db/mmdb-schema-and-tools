@@ -29,7 +29,7 @@ import { fileURLToPath } from 'url';
 import { gunzipSync, gzipSync } from 'zlib';
 import { loadGitHubAuth } from './lib/github-app-auth.mjs';
 import { createProgress, trackDownload } from './lib/progress.mjs';
-import { ORG, retryOnServerError, createGitHubClient } from './lib/rescan-core.mjs';
+import { ORG, retryOnServerError, createGitHubClient, generateSlug } from './lib/rescan-core.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -182,10 +182,16 @@ async function extractEntriesFromTarball(tokenOrManager, yearRepo) {
         try {
           const content = tarData.subarray(offset, offset + size).toString('utf8');
           const show = JSON.parse(content);
+          const title = show.title || show.name;
+          const startYear = show.start_year ?? null;
+          // Include year in series ID to prevent duplicates (matches movie pattern: m_slug_year)
+          const id = startYear
+            ? `s_${generateSlug(title)}_${startYear}`
+            : `s_${generateSlug(title)}`;
           series.push({
-            id: show.id,
-            title: show.title || show.name,
-            start_year: show.start_year ?? null,
+            id,
+            title,
+            start_year: startYear,
             end_year: show.end_year ?? null,
             total_seasons: show.total_seasons ?? null,
             total_episodes: show.total_episodes ?? null,

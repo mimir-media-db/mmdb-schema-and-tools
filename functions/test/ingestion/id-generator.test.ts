@@ -74,12 +74,20 @@ describe('ID Generator', () => {
   });
 
   describe('generateSeriesId', () => {
-    it('should produce s_<slug> format', () => {
-      assert.strictEqual(generateSeriesId('Breaking Bad'), 's_breaking_bad');
+    it('should produce s_<slug>_<year> format when year provided', () => {
+      assert.strictEqual(generateSeriesId('Breaking Bad', 2008), 's_breaking_bad_2008');
     });
 
     it('should strip leading articles', () => {
-      assert.strictEqual(generateSeriesId('The Wire'), 's_wire');
+      assert.strictEqual(generateSeriesId('The Wire', 2002), 's_wire_2002');
+    });
+
+    it('should produce s_<slug> format when year is null', () => {
+      assert.strictEqual(generateSeriesId('Breaking Bad', null), 's_breaking_bad');
+    });
+
+    it('should produce s_<slug> format when year is undefined', () => {
+      assert.strictEqual(generateSeriesId('Breaking Bad'), 's_breaking_bad');
     });
   });
 });
