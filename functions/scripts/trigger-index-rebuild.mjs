@@ -123,7 +123,7 @@ async function pushEmptyCommit(ghApi, repo) {
   // Create empty commit (same tree, new commit)
   const { ok: newCommitOk, data: newCommit } = await retryOnServerError(
     () => ghApi('POST', `/repos/${ORG}/${repo}/git/commits`, {
-      message: 'chore: trigger index rebuild [skip ci]\n\nTriggered by trigger-index-rebuild.mjs',
+      message: 'chore: trigger index rebuild\n\nTriggered by trigger-index-rebuild.mjs',
       tree: commitData.tree.sha,
       parents: [masterSha],
     }),
