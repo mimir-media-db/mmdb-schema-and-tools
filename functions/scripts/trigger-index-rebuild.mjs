@@ -104,42 +104,43 @@ async function tryDispatchWorkflow(ghApi, repo) {
 }
 
 /**
- * Fallback: create an empty commit on master to trigger push-based CI.
+ * Fallback: create a trigger file in data/ to trigger push-based CI (path filter: data/**).
  */
-async function pushEmptyCommit(ghApi, repo) {
+async function pushTriggerFile(ghApi, repo) {
   const masterSha = await getDefaultBranchSha(ghApi, repo);
   if (!masterSha) return false;
 
   await sleep(GITHUB_RATE_LIMIT_MS);
 
-  // Get current commit to get tree SHA
-  const { ok: commitOk, data: commitData } = await retryOnServerError(
-    () => ghApi('GET', `/repos/${ORG}/${repo}/git/commits/${masterSha}`),
+  // Create or update data/.rebuild-trigger with timestamp
+  const triggerContent = Buffer.from(
+    `Rebuild triggered at ${new Date().toISOString()}\n`
+  ).toString('base64');
+
+  // Check if file already exists (to get its SHA for update)
+  let fileSha = null;
+  const { ok: getOk, data: existingFile } = await retryOnServerError(
+    () => ghApi('GET', `/repos/${ORG}/${repo}/contents/data/.rebuild-trigger`),
   );
-  if (!commitOk) return false;
+  if (getOk && existingFile && existingFile.sha) {
+    fileSha = existingFile.sha;
+  }
 
   await sleep(GITHUB_RATE_LIMIT_MS);
 
-  // Create empty commit (same tree, new commit)
-  const { ok: newCommitOk, data: newCommit } = await retryOnServerError(
-    () => ghApi('POST', `/repos/${ORG}/${repo}/git/commits`, {
-      message: 'chore: trigger index rebuild\n\nTriggered by trigger-index-rebuild.mjs',
-      tree: commitData.tree.sha,
-      parents: [masterSha],
-    }),
-  );
-  if (!newCommitOk) return false;
+  // Create/update the trigger file
+  const body = {
+    message: 'chore: trigger index rebuild\n\nTriggered by trigger-index-rebuild.mjs',
+    content: triggerContent,
+    branch: 'master',
+  };
+  if (fileSha) body.sha = fileSha;
 
-  await sleep(GITHUB_RATE_LIMIT_MS);
-
-  // Update master ref
-  const { ok: updateOk } = await retryOnServerError(
-    () => ghApi('PATCH', `/repos/${ORG}/${repo}/git/refs/heads/master`, {
-      sha: newCommit.sha,
-    }),
+  const { ok: putOk } = await retryOnServerError(
+    () => ghApi('PUT', `/repos/${ORG}/${repo}/contents/data/.rebuild-trigger`, body),
   );
 
-  return updateOk;
+  return putOk;
 }
 
 // ─── Main ────────────────────────────────────────────────────────────────────
@@ -207,12 +208,12 @@ async function main() {
         console.log('✓ workflow dispatched');
         triggered++;
       } else {
-        // Fallback: empty commit to trigger push-based CI
-        process.stdout.write('(no dispatch) → empty commit... ');
-        const pushed = await pushEmptyCommit(ghApi, repo);
+        // Fallback: touch data/.rebuild-trigger to trigger push-based CI (path filter)
+        process.stdout.write('(no dispatch) → trigger file... ');
+        const pushed = await pushTriggerFile(ghApi, repo);
 
         if (pushed) {
-          console.log('✓ empty commit pushed');
+          console.log('✓ trigger file pushed');
           triggered++;
         } else {
           console.log('✗ failed');
