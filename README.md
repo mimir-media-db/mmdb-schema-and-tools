@@ -41,6 +41,11 @@ cat mmdb-2026/data/movies/index.json | jq '.[0:3]'
 | Serverless pipeline (Firebase Cloud Functions) | ✅ Deployed |
 | Auto-merge bot PRs (squash) | ✅ Active |
 | Automated year repo creation | ✅ Active |
+| Combined index (GitHub Release) | ✅ Nightly build |
+| Credits index (movie↔people) | ✅ 750K+ credits |
+| People sharded alphabetically (A-Z) | ✅ 26 repos, 300K+ people |
+| Incremental credits Cloud Function | ✅ Nightly |
+| Combined credits index builder | ✅ Published |
 
 ## Roadmap
 
@@ -51,9 +56,14 @@ cat mmdb-2026/data/movies/index.json | jq '.[0:3]'
 - ✅ Local ingestion script (movies)
 - ✅ People ingestion (cast, directors, producers)
 - ✅ Series ingestion from Wikidata
-- ✅ Serverless ingestion pipeline (Firebase Cloud Functions, 6x daily)
-- ⏳ Additional year repos (2011-2025)
+- ✅ Serverless ingestion pipeline (Firebase Cloud Functions)
+- ✅ Additional year repos (2000-2026, all 27 created)
+- ✅ People sharding (mmdb-people-{a-z}, 26 repos)
+- ✅ Credits system (750K+ movie↔people relationships)
+- ✅ Combined index published as GitHub Release
 - ⏳ Community contribution workflow
+- ⏳ Multi-language titles (i18n)
+- ⏳ Type classification (documentaries, shorts)
 
 ## Repository Structure
 
@@ -78,6 +88,11 @@ mmdb-schema-and-tools/          # This repo
 │   │   ├── index.ts           # Cloud Function entry points
 │   │   └── ingestion/         # Wikidata SPARQL ingestion logic
 │   ├── scripts/               # Manual scripts (cleanup, rescan, etc.)
+│   │   ├── build-combined-index.mjs    # Builds combined-index.json.gz
+│   │   ├── build-combined-credits-index.mjs  # Builds combined-credits-index.json.gz
+│   │   ├── build-credits.mjs           # Bulk credits builder (Wikidata → credits.json)
+│   │   ├── bulk-people.mjs             # Bulk people enrichment
+│   │   ├── rescan-year.mjs             # Re-scan a year for missed films
 │   │   └── lib/               # Shared helpers (GitHub App auth)
 │   ├── test/                  # Unit tests
 │   └── README.md              # Full deployment + script docs
@@ -90,10 +105,11 @@ mmdb-schema-and-tools/          # This repo
 |-----------|---------|
 | [mmdb-schema-and-tools](https://github.com/mimir-media-db/mmdb-schema-and-tools) | Schemas, tools, ingestion pipeline |
 | [mmdb-meta](https://github.com/mimir-media-db/mmdb-meta) | Registry, stats, ingestion state |
-| [mmdb-people](https://github.com/mimir-media-db/mmdb-people) | Global people database |
+| [mmdb-people-{a-z}](https://github.com/mimir-media-db) | People database (26 alphabetical repos, 300K+ entries) |
 | [mmdb-2009](https://github.com/mimir-media-db/mmdb-2009) | Movies & series from 2009 |
 | [mmdb-2010](https://github.com/mimir-media-db/mmdb-2010) | Movies & series from 2010 |
 | [mmdb-2026](https://github.com/mimir-media-db/mmdb-2026) | Movies & series from 2026 |
+| Combined Index | Published as [GitHub Release](https://github.com/mimir-media-db/mmdb-schema-and-tools/releases/latest) — movies + series in one file |
 
 New year repos are created automatically as the ingestion pipeline advances.
 
@@ -101,14 +117,29 @@ New year repos are created automatically as the ingestion pipeline advances.
 
 The pipeline runs as Firebase Cloud Functions:
 
-- **6x daily** — Backlog pass (forward from 2010→now, backward from 2009→1888)
-- **Nightly** — Current year full scan + 48h recently-modified catch-up
+- **Nightly 2 AM** — Current year ingestion (movies + series + people)
+- **Nightly 3 AM** — Credits ingestion for new movies
+- **Nightly 5 AM** — Combined index rebuild + publish
 - **Weekly** — Q-ID and non-Latin title cleanup (Sunday 4 AM)
 - **Source** — [Wikidata](https://www.wikidata.org/) SPARQL queries (12-language label fallback)
 - **Output** — Pull requests with auto-merge (squash)
 - **Title validation** — Q-ID rejection + non-Latin slug filter (`isUsableTitle()`)
 
 Safeguards: kill switch, concurrency lock, anomaly detection, title count sanity checks.
+
+## Combined Index
+
+A pre-built combined index merging all year repos into a single downloadable file:
+
+- **URL**: `https://github.com/mimir-media-db/mmdb-schema-and-tools/releases/latest/download/combined-index.json.gz`
+- **Size**: ~5.5 MB (gzipped), ~40 MB uncompressed
+- **Contents**: 124K+ movies, 31K+ series with titles, years, genres, external IDs
+- **Updated**: Nightly at 5 AM UTC via CI
+- **Format**: JSON with `version`, `stats`, `movies[]`, `series[]`
+
+Also available: `combined-credits-index.json.gz` — 750K+ movie↔people relationships.
+
+Consumers download once, cache locally. No API needed.
 
 ## Usage
 
