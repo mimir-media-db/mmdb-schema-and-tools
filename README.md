@@ -47,6 +47,7 @@ cat mmdb-2026/data/movies/index.json | jq '.[0:3]'
 | Incremental credits Cloud Function | ✅ Nightly |
 | Combined credits index builder | ✅ Published |
 | Genre + isAdult enrichment (IMDB bulk) | ✅ 94% coverage |
+| Country of origin enrichment (Wikidata P495) | ✅ 95% coverage |
 
 ## Roadmap
 
@@ -63,6 +64,7 @@ cat mmdb-2026/data/movies/index.json | jq '.[0:3]'
 - ✅ Credits system (750K+ movie↔people relationships)
 - ✅ Combined index published as GitHub Release
 - ✅ Genre + isAdult enrichment from IMDB (94% coverage)
+- ✅ Country of origin enrichment from Wikidata (95% coverage)
 - ⏳ Community contribution workflow
 - ⏳ Multi-language titles (i18n)
 - ⏳ Type classification (documentaries, shorts)
