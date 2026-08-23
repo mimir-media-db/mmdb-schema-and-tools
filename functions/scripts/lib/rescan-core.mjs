@@ -482,9 +482,10 @@ export function generateMovieId(title, movieYear) {
 }
 
 export function generateSeriesId(title, startYear) {
-  return startYear
-    ? `s_${generateSlug(title)}_${startYear}`
-    : `s_${generateSlug(title)}`;
+  if (!startYear || typeof startYear !== 'number') {
+    throw new Error(`generateSeriesId requires a valid startYear, got: ${startYear}`);
+  }
+  return `s_${generateSlug(title)}_${startYear}`;
 }
 
 export function normalizeMovie(wikiMovie) {

@@ -69,7 +69,7 @@ test('normalizeSeries - minimal series', () => {
   const result = normalizeSeries(wikiSeries);
   
   assert.strictEqual(result.schema_version, 1);
-  assert.strictEqual(result.id, 's_breaking_bad');
+  assert.strictEqual(result.id, 's_breaking_bad_2008');
   assert.strictEqual(result.title, 'Breaking Bad');
   assert.strictEqual(result.start_year, 2008);
   assert.strictEqual(result.end_year, null);
@@ -92,7 +92,7 @@ test('normalizeSeries - full series with all fields', () => {
   
   const result = normalizeSeries(wikiSeries);
   
-  assert.strictEqual(result.id, 's_game_of_thrones');
+  assert.strictEqual(result.id, 's_game_of_thrones_2011');
   assert.strictEqual(result.start_year, 2011);
   assert.strictEqual(result.end_year, 2019);
   assert.strictEqual(result.total_seasons, 8);
@@ -111,7 +111,7 @@ test('normalizeSeries - ongoing series (no end year)', () => {
   
   const result = normalizeSeries(wikiSeries);
   
-  assert.strictEqual(result.id, 's_simpsons');
+  assert.strictEqual(result.id, 's_simpsons_1989');
   assert.strictEqual(result.start_year, 1989);
   assert.strictEqual(result.end_year, null);
 });
