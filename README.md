@@ -48,6 +48,7 @@ cat mmdb-2026/data/movies/index.json | jq '.[0:3]'
 | Combined credits index builder | ✅ Published |
 | Genre + isAdult enrichment (IMDB bulk) | ✅ 94% coverage |
 | Country of origin enrichment (Wikidata P495) | ✅ 95% coverage |
+| Series ID uniqueness fix (year suffix) | ✅ Zero duplicates |
 
 ## Roadmap
 
@@ -85,6 +86,8 @@ mmdb-schema-and-tools/          # This repo
 │       ├── build-indexes.ts
 │       ├── create-year-repo.ts
 │       ├── enrich-from-imdb.ts    # Genre + isAdult enrichment from IMDB bulk data
+│       ├── enrich-countries.ts       # Country of origin enrichment from Wikidata P495
+│       ├── fix-series-ids.ts         # Series ID migration (add year suffix)
 │       ├── create-enrichment-prs.ts  # PR creation for enrichment branches (bot auth)
 │       ├── ingest-from-wikidata.ts
 │       ├── ingest-people.ts
@@ -186,6 +189,14 @@ node functions/scripts/rescan-year.mjs --year=2010 --include-series
 npx tsx tools/src/enrich-from-imdb.ts --year=2026          # single year (dry run)
 npx tsx tools/src/enrich-from-imdb.ts --all                # all years
 npx tsx tools/src/enrich-from-imdb.ts --all --skip-download # reuse cached IMDB file
+
+# Enrich titles with countries from Wikidata P495
+npx tsx tools/src/enrich-countries.ts --year=2026          # single year
+npx tsx tools/src/enrich-countries.ts --all --commit       # all years + commit
+
+# Fix series IDs (add year suffix to prevent duplicates)
+npx tsx tools/src/fix-series-ids.ts --year=2026 --dry-run  # preview
+npx tsx tools/src/fix-series-ids.ts --all --commit         # apply to all
 
 # Create PRs for enrichment branches (uses GitHub App bot auth)
 npx tsx --env-file=functions/.env tools/src/create-enrichment-prs.ts         # dry run
