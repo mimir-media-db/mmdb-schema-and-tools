@@ -13,5 +13,5 @@
     "declaration": true
   },
   "include": ["tools/src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules", "dist", "tools/src/enrich-from-imdb.ts", "tools/src/enrich-countries.ts", "tools/src/create-enrichment-prs.ts"]
 }
