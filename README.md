@@ -46,6 +46,7 @@ cat mmdb-2026/data/movies/index.json | jq '.[0:3]'
 | People sharded alphabetically (A-Z) | ✅ 26 repos, 300K+ people |
 | Incremental credits Cloud Function | ✅ Nightly |
 | Combined credits index builder | ✅ Published |
+| Genre + isAdult enrichment (IMDB bulk) | ✅ 94% coverage |
 
 ## Roadmap
 
@@ -61,6 +62,7 @@ cat mmdb-2026/data/movies/index.json | jq '.[0:3]'
 - ✅ People sharding (mmdb-people-{a-z}, 26 repos)
 - ✅ Credits system (750K+ movie↔people relationships)
 - ✅ Combined index published as GitHub Release
+- ✅ Genre + isAdult enrichment from IMDB (94% coverage)
 - ⏳ Community contribution workflow
 - ⏳ Multi-language titles (i18n)
 - ⏳ Type classification (documentaries, shorts)
@@ -80,6 +82,8 @@ mmdb-schema-and-tools/          # This repo
 │       ├── validate-repo.ts
 │       ├── build-indexes.ts
 │       ├── create-year-repo.ts
+│       ├── enrich-from-imdb.ts    # Genre + isAdult enrichment from IMDB bulk data
+│       ├── create-enrichment-prs.ts  # PR creation for enrichment branches (bot auth)
 │       ├── ingest-from-wikidata.ts
 │       ├── ingest-people.ts
 │       └── ingest-series.ts
@@ -175,6 +179,15 @@ See [functions/README.md](functions/README.md) for full deployment docs.
 # Re-scan a historical year for missed films
 node functions/scripts/rescan-year.mjs --year=2010 --dry-run
 node functions/scripts/rescan-year.mjs --year=2010 --include-series
+
+# Enrich titles with genres + isAdult from IMDB bulk data
+npx tsx tools/src/enrich-from-imdb.ts --year=2026          # single year (dry run)
+npx tsx tools/src/enrich-from-imdb.ts --all                # all years
+npx tsx tools/src/enrich-from-imdb.ts --all --skip-download # reuse cached IMDB file
+
+# Create PRs for enrichment branches (uses GitHub App bot auth)
+npx tsx --env-file=functions/.env tools/src/create-enrichment-prs.ts         # dry run
+npx tsx --env-file=functions/.env tools/src/create-enrichment-prs.ts --live  # create PRs
 
 # Bulk-fill all years (creates repos as needed)
 node functions/scripts/bulk-fill.mjs --from=1920 --to=2026 --include-series

@@ -58,6 +58,9 @@
         "type": "string"
       }
     },
+    "is_adult": {
+      "type": "boolean"
+    },
     "directors": {
       "type": "array",
       "items": {
