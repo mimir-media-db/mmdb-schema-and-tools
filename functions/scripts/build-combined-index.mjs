@@ -171,6 +171,8 @@ async function extractEntriesFromTarball(tokenOrManager, yearRepo) {
             type: 'movie',
             release_date: movie.release_date ?? null,
             runtime_minutes: movie.runtime_minutes ?? null,
+            genres: movie.genres ?? null,
+            is_adult: movie.is_adult ?? false,
             external_ids: movie.external_ids ?? {},
           });
         } catch {
@@ -195,6 +197,8 @@ async function extractEntriesFromTarball(tokenOrManager, yearRepo) {
             end_year: show.end_year ?? null,
             total_seasons: show.total_seasons ?? null,
             total_episodes: show.total_episodes ?? null,
+            genres: show.genres ?? null,
+            is_adult: show.is_adult ?? false,
             external_ids: show.external_ids ?? {},
           });
         } catch {
