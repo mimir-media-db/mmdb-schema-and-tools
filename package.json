@@ -1,6 +1,6 @@
 {
   "name": "mmdb-schema-and-tools",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "JSON schemas, validation tools, and documentation for MMDB",
   "main": "dist/index.js",
   "type": "module",
